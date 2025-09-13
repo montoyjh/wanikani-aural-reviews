@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wanikani Aural Reviews</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🎧 Wanikani Aural Reviews</h1>
+            <p>Practice your Japanese with voice-based reviews</p>
+        </header>
+
+        <div class="api-setup" id="apiSetup">
+            <div class="setup-card">
+                <h2>API Setup</h2>
+                <p>Enter your Wanikani API token to get started:</p>
+                <div class="input-group">
+                    <input type="password" id="apiToken" placeholder="Your Wanikani API token">
+                    <button id="saveToken" class="btn btn-primary">Save & Start</button>
+                </div>
+                <p class="help-text">
+                    Get your API token from <a href="https://www.wanikani.com/settings/personal_access_tokens" target="_blank">Wanikani Settings</a>
+                </p>
+            </div>
+        </div>
+
+        <div class="review-interface" id="reviewInterface" style="display: none;">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+                <span class="progress-text" id="progressText">0 / 0</span>
+            </div>
+
+            <div class="review-card">
+                <div class="item-info">
+                    <div class="item-type" id="itemType">Loading...</div>
+                    <div class="item-character" id="itemCharacter">⏳</div>
+                </div>
+
+                <div class="question-section">
+                    <h3 id="questionText">What is the meaning of this kanji?</h3>
+                    <button id="playQuestion" class="btn btn-secondary">
+                        🔊 Play Question
+                    </button>
+                </div>
+
+                <div class="answer-section">
+                    <button id="startListening" class="btn btn-primary">
+                        🎤 Start Speaking
+                    </button>
+                    <div class="listening-indicator" id="listeningIndicator" style="display: none;">
+                        <div class="pulse"></div>
+                        <span>Listening...</span>
+                    </div>
+                    <div class="user-answer" id="userAnswer"></div>
+                </div>
+
+                <div class="result-section" id="resultSection" style="display: none;">
+                    <div class="result-message" id="resultMessage"></div>
+                    <div class="correct-answer" id="correctAnswer"></div>
+                    <button id="nextQuestion" class="btn btn-primary">Next Question</button>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button id="pauseReviews" class="btn btn-secondary">Pause Reviews</button>
+                <button id="endSession" class="btn btn-outline">End Session</button>
+            </div>
+        </div>
+
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Loading reviews...</p>
+        </div>
+
+        <div class="error" id="error" style="display: none;">
+            <div class="error-message" id="errorMessage"></div>
+            <button id="retryButton" class="btn btn-primary">Retry</button>
+        </div>
+    </div>
+
+    <!-- Kuroshiro for Japanese text conversion -->
+    <script src="https://unpkg.com/kuroshiro@1.2.0/dist/kuroshiro.min.js"></script>
+    <script src="https://unpkg.com/kuroshiro-analyzer-kuromoji@1.1.0/dist/kuroshiro-analyzer-kuromoji.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
+
