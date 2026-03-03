@@ -22,22 +22,17 @@ class WanikaniAuralReviews {
         this.vocabularyData = new Map(); // character -> { readings: [], meanings: [] }
         this.dataLoaded = false;
         
-        // Kuroshiro for Japanese text conversion
+        // Kuroshiro for Japanese text conversion (lazy loaded)
         this.kuroshiro = null;
         this.kuroshiroInitialized = false;
-        
+        this.kuroshiroInitializing = false;
+
         this.initializeElements();
         this.initializeSpeechRecognition();
         this.initializeEventListeners();
-        
-        // Wait a bit for scripts to load, then initialize kuroshiro
-        setTimeout(() => {
-            this.initializeKuroshiro().then(() => {
-                // Test kuroshiro after initialization
-                this.testKuroshiro();
-            });
-        }, 1000);
-        
+
+        // Kuroshiro is now lazy-loaded when needed to avoid blocking page load
+
         if (this.apiToken) {
             this.loadWanikaniData().then(() => {
                 this.startReviews();
@@ -193,37 +188,42 @@ class WanikaniAuralReviews {
     }
 
     async initializeKuroshiro() {
+        // Prevent multiple initialization attempts
+        if (this.kuroshiroInitialized || this.kuroshiroInitializing) {
+            return;
+        }
+
         try {
             if (typeof Kuroshiro === 'undefined' || typeof KuromojiAnalyzer === 'undefined') {
                 console.warn('Kuroshiro libraries not loaded, falling back to local conversion');
                 return;
             }
 
+            this.kuroshiroInitializing = true;
+            console.log('Initializing Kuroshiro (this may take a moment)...');
+
             // Kuroshiro is an ES module, so we need to use .default
             this.kuroshiro = new Kuroshiro.default();
-            
+
             // Initialize with kuromoji analyzer using CDN dictionary path
-            await this.kuroshiro.init(new KuromojiAnalyzer({ 
-                dictPath: "https://unpkg.com/kuromoji@0.1.2/dict/" 
+            // Wrap in a timeout to prevent infinite hangs
+            const initPromise = this.kuroshiro.init(new KuromojiAnalyzer({
+                dictPath: "https://unpkg.com/kuromoji@0.1.2/dict/"
             }));
+
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Kuroshiro initialization timeout')), 30000);
+            });
+
+            await Promise.race([initPromise, timeoutPromise]);
+
             this.kuroshiroInitialized = true;
+            this.kuroshiroInitializing = false;
             console.log('Kuroshiro initialized successfully');
         } catch (error) {
             console.error('Failed to initialize Kuroshiro:', error);
             this.kuroshiroInitialized = false;
-        }
-    }
-
-    async testKuroshiro() {
-        if (this.kuroshiroInitialized && this.kuroshiro) {
-            try {
-                const testResult = await this.kuroshiro.convert('学校', { to: 'hiragana' });
-                console.log('Kuroshiro test successful:', testResult);
-            } catch (error) {
-                console.error('Kuroshiro test failed:', error);
-            }
-        } else {
-            console.log('Kuroshiro not initialized, skipping test');
+            this.kuroshiroInitializing = false;
         }
     }
 
@@ -910,8 +910,14 @@ class WanikaniAuralReviews {
 
     async convertToHiragana(text) {
         console.log(`Converting "${text}" to hiragana...`);
-        
-        // First, try Kuroshiro if available
+
+        // Lazy-initialize Kuroshiro on first use (non-blocking)
+        if (!this.kuroshiroInitialized && !this.kuroshiroInitializing) {
+            // Start initialization in background, don't wait for it
+            this.initializeKuroshiro();
+        }
+
+        // Try Kuroshiro if already initialized
         if (this.kuroshiroInitialized && this.kuroshiro) {
             try {
                 const hiragana = await this.kuroshiro.convert(text, { to: 'hiragana' });
