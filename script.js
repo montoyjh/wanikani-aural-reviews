@@ -513,7 +513,20 @@ class WanikaniAuralReviews {
     speakQuestionType(questionType) {
         // Speak just "meaning" or "reading"
         const text = questionType === 'meaning' ? 'meaning' : 'reading';
-        this.speak(text);
+
+        // After speech completes, wait a buffer then start listening (if in continuous mode)
+        const onSpeechComplete = () => {
+            if (this.continuousMode && !this.isPaused && !this.isListening) {
+                // Add buffer after speech before listening starts
+                setTimeout(() => {
+                    if (this.continuousMode && !this.isPaused && !this.isListening && !this.answerLocked) {
+                        this.startListening();
+                    }
+                }, 800);
+            }
+        };
+
+        this.speak(text, onSpeechComplete);
     }
 
     determineQuestionType() {
@@ -1207,14 +1220,7 @@ class WanikaniAuralReviews {
 
         this.stopListening();
 
-        // Auto-start listening in continuous mode after a short delay
-        if (this.continuousMode && !this.isPaused) {
-            setTimeout(() => {
-                if (this.continuousMode && !this.isListening && !this.isPaused) {
-                    this.startListening();
-                }
-            }, 500);
-        }
+        // Listening will be started by speakQuestionType after speech completes
     }
 }
 
