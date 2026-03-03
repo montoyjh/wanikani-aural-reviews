@@ -183,6 +183,14 @@ body {
     margin-bottom: 30px;
 }
 
+.mic-controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
 .listening-indicator {
     display: flex;
     align-items: center;
@@ -302,6 +310,12 @@ body {
     opacity: 0.6;
     cursor: not-allowed;
     transform: none !important;
+}
+
+.btn.active {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+    box-shadow: 0 5px 15px rgba(40, 167, 69, 0.3);
 }
 
 /* Controls */

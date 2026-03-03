@@ -42,15 +42,17 @@
 
                 <div class="question-section">
                     <h3 id="questionText">What is the meaning of this kanji?</h3>
-                    <button id="playQuestion" class="btn btn-secondary">
-                        🔊 Play Question
-                    </button>
                 </div>
 
                 <div class="answer-section">
+                    <div class="mic-controls">
                     <button id="startListening" class="btn btn-primary">
                         🎤 Start Speaking
                     </button>
+                        <button id="continuousMode" class="btn btn-secondary">
+                            🔄 Continuous Mode: OFF
+                        </button>
+                    </div>
                     <div class="listening-indicator" id="listeningIndicator" style="display: none;">
                         <div class="pulse"></div>
                         <span>Listening...</span>
@@ -67,6 +69,7 @@
 
             <div class="controls">
                 <button id="pauseReviews" class="btn btn-secondary">Pause Reviews</button>
+                <button id="changeApiToken" class="btn btn-outline">Change API Token</button>
                 <button id="endSession" class="btn btn-outline">End Session</button>
             </div>
         </div>

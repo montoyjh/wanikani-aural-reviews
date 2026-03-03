@@ -7,6 +7,15 @@ class WanikaniAuralReviews {
         this.synthesis = window.speechSynthesis;
         this.isListening = false;
         this.isPaused = false;
+        this.continuousMode = false;
+        this.continuousTimeout = null;
+        this.autoAdvanceTimeout = null;
+
+        // Track current review state (both meaning and reading must be answered)
+        this.currentReviewState = null; // { assignmentId, subjectType, meaningAnswered, readingAnswered, incorrectMeaningCount, incorrectReadingCount }
+
+        // Prevent re-evaluation of already answered questions
+        this.answerLocked = false;
         
         // Local data cache
         this.kanjiData = new Map(); // character -> { readings: [], meanings: [] }
@@ -51,8 +60,8 @@ class WanikaniAuralReviews {
             itemType: document.getElementById('itemType'),
             itemCharacter: document.getElementById('itemCharacter'),
             questionText: document.getElementById('questionText'),
-            playQuestion: document.getElementById('playQuestion'),
             startListening: document.getElementById('startListening'),
+            continuousMode: document.getElementById('continuousMode'),
             listeningIndicator: document.getElementById('listeningIndicator'),
             userAnswer: document.getElementById('userAnswer'),
             resultSection: document.getElementById('resultSection'),
@@ -60,6 +69,7 @@ class WanikaniAuralReviews {
             correctAnswer: document.getElementById('correctAnswer'),
             nextQuestion: document.getElementById('nextQuestion'),
             pauseReviews: document.getElementById('pauseReviews'),
+            changeApiToken: document.getElementById('changeApiToken'),
             endSession: document.getElementById('endSession'),
             retryButton: document.getElementById('retryButton'),
             errorMessage: document.getElementById('errorMessage')
@@ -70,7 +80,7 @@ class WanikaniAuralReviews {
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             this.recognition = new SpeechRecognition();
-            this.recognition.continuous = false;
+            this.recognition.continuous = true; // Enable continuous mode
             this.recognition.interimResults = false;
             // Language will be set dynamically based on question type
             
@@ -82,9 +92,24 @@ class WanikaniAuralReviews {
             
             this.recognition.onresult = async (event) => {
                 console.log('Speech recognition result:', event.results);
-                const transcript = event.results[0][0].transcript.toLowerCase().trim();
-                console.log('Transcript:', transcript);
+                const result = event.results[event.results.length - 1][0];
+                const transcript = result.transcript.toLowerCase().trim();
+                const confidence = result.confidence;
+
+                console.log('Transcript:', transcript, 'Confidence:', confidence);
                 console.log('Recognition language:', this.recognition.lang);
+
+                // Filter out low-confidence results (likely noise)
+                if (confidence < 0.5) {
+                    console.log('Ignoring low-confidence result:', confidence);
+                    return;
+                }
+
+                // Filter out very short utterances (likely noise)
+                if (transcript.length < 2) {
+                    console.log('Ignoring short utterance:', transcript);
+                    return;
+                }
                 
                 // For Japanese reading questions, convert kanji to hiragana for display
                 if (this.currentQuestionType === 'reading') {
@@ -94,24 +119,49 @@ class WanikaniAuralReviews {
                         this.elements.userAnswer.textContent = `${transcript} → ${convertedTranscript}`;
                     } catch (error) {
                         console.warn('Failed to convert transcript:', error);
-                        this.elements.userAnswer.textContent = transcript;
+                this.elements.userAnswer.textContent = transcript;
                     }
                 } else {
                     this.elements.userAnswer.textContent = transcript;
                 }
                 
                 this.processAnswer(transcript);
+                
+                // In continuous mode, restart listening after processing
+                if (this.continuousMode && this.isListening) {
+                    this.restartContinuousListening();
+                }
             };
             
             this.recognition.onerror = (event) => {
                 console.error('Speech recognition error:', event.error);
-                this.elements.userAnswer.textContent = `Error: ${event.error}`;
+                // Don't show error for no-speech, just silently handle it
+                if (event.error === 'no-speech') {
+                    // In continuous mode, we'll restart via onend with a delay
+                    // Don't spam the user with error messages
+                    console.log('No speech detected, will retry...');
+                } else {
+                    this.elements.userAnswer.textContent = `Error: ${event.error}`;
+                }
                 this.stopListening();
             };
             
             this.recognition.onend = () => {
                 console.log('Speech recognition ended');
-                this.stopListening();
+                // In continuous mode, restart listening instead of stopping
+                // But respect paused state and answer lock
+                if (this.continuousMode && !this.isPaused && !this.answerLocked) {
+                    this.isListening = false;
+                    this.elements.listeningIndicator.style.display = 'none';
+                    // Restart listening after a delay (longer to avoid rapid retries)
+                    setTimeout(() => {
+                        if (this.continuousMode && !this.isListening && !this.isPaused && !this.answerLocked) {
+                            this.startListening();
+                        }
+                    }, 1000);
+                } else {
+                    this.stopListening();
+                }
             };
         } else {
             console.warn('Speech recognition not supported');
@@ -123,13 +173,23 @@ class WanikaniAuralReviews {
         this.elements.apiToken.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.saveApiToken();
         });
-        
-        this.elements.playQuestion.addEventListener('click', () => this.playQuestion());
+
         this.elements.startListening.addEventListener('click', () => this.toggleListening());
         this.elements.nextQuestion.addEventListener('click', () => this.nextQuestion());
         this.elements.pauseReviews.addEventListener('click', () => this.togglePause());
         this.elements.endSession.addEventListener('click', () => this.endSession());
         this.elements.retryButton.addEventListener('click', () => this.retry());
+        
+        // Add event listeners for new elements if they exist
+        if (this.elements.continuousMode) {
+            this.elements.continuousMode.addEventListener('click', () => this.toggleContinuousMode());
+        }
+        if (this.elements.changeApiToken) {
+            this.elements.changeApiToken.addEventListener('click', () => this.changeApiToken());
+        }
+        if (this.elements.clearApiToken) {
+            this.elements.clearApiToken.addEventListener('click', () => this.clearApiToken());
+        }
     }
 
     async initializeKuroshiro() {
@@ -179,6 +239,22 @@ class WanikaniAuralReviews {
         
         await this.loadWanikaniData();
         await this.startReviews();
+    }
+
+    changeApiToken() {
+        if (confirm('Are you sure you want to change your API token? This will clear your current session.')) {
+            localStorage.removeItem('wanikani_api_token');
+            this.apiToken = null;
+            this.showApiSetup();
+        }
+    }
+
+    clearApiToken() {
+        if (confirm('Are you sure you want to clear your API token? This will end your current session.')) {
+            localStorage.removeItem('wanikani_api_token');
+            this.apiToken = null;
+            this.showApiSetup();
+        }
     }
 
     async loadWanikaniData() {
@@ -371,6 +447,19 @@ class WanikaniAuralReviews {
         }
 
         const review = this.currentReviews[this.currentReviewIndex];
+
+        // Initialize review state for this assignment if not already set
+        if (!this.currentReviewState || this.currentReviewState.assignmentId !== review.id) {
+            this.currentReviewState = {
+                assignmentId: review.id,
+                subjectType: null, // Will be set when subject loads
+                meaningAnswered: false,
+                readingAnswered: false,
+                incorrectMeaningCount: 0,
+                incorrectReadingCount: 0
+            };
+        }
+
         this.loadSubjectData(review.data.subject_id);
         this.updateProgress();
         this.resetAnswerSection();
@@ -380,16 +469,21 @@ class WanikaniAuralReviews {
         try {
             const subject = await this.fetchSubject(subjectId);
             console.log('Subject received in loadSubjectData:', subject); // Debug log
-            
+
             this.currentSubject = subject;
-            
+
             // The subject IS the data object from the API response
             if (!subject) {
                 throw new Error('No subject data received');
             }
-            
+
+            // Update review state with subject type
+            if (this.currentReviewState) {
+                this.currentReviewState.subjectType = subject.object; // 'radical', 'kanji', or 'vocabulary'
+            }
+
             this.elements.itemType.textContent = subject.object || 'Unknown';
-            
+
             // Handle different subject types (radicals, kanji, vocabulary)
             let characters = 'N/A';
             if (subject.characters) {
@@ -398,30 +492,53 @@ class WanikaniAuralReviews {
                 // For radicals without characters, use the slug
                 characters = subject.slug;
             }
-            
+
             this.elements.itemCharacter.textContent = characters;
-            
+
             // Determine question type and text
-            const assignment = this.currentReviews[this.currentReviewIndex];
-            const questionType = this.determineQuestionType(assignment);
-            
+            const questionType = this.determineQuestionType();
+
             this.elements.questionText.textContent = this.getQuestionText(questionType);
             this.currentQuestionType = questionType;
-            
+
+            // Automatically speak the question type
+            this.speakQuestionType(questionType);
+
         } catch (error) {
             console.error('Error loading subject:', error);
             this.showError('Failed to load review item');
         }
     }
 
-    determineQuestionType(assignment) {
-        // Simple logic to determine question type based on available reviews
-        const availableReviews = assignment.data.available_at;
-        const srsStage = assignment.data.srs_stage;
-        
-        // For now, alternate between meaning and reading
-        // In a real implementation, you'd use Wanikani's review logic
-        return this.currentReviewIndex % 2 === 0 ? 'meaning' : 'reading';
+    speakQuestionType(questionType) {
+        // Speak just "meaning" or "reading"
+        const text = questionType === 'meaning' ? 'meaning' : 'reading';
+        this.speak(text);
+    }
+
+    determineQuestionType() {
+        const state = this.currentReviewState;
+
+        if (!state) {
+            return 'meaning'; // Default fallback
+        }
+
+        // Radicals only have meanings, no readings
+        const isRadical = state.subjectType === 'radical';
+
+        // If meaning not yet answered, ask meaning first
+        if (!state.meaningAnswered) {
+            return 'meaning';
+        }
+
+        // If reading not yet answered and this subject has readings (not a radical)
+        if (!state.readingAnswered && !isRadical) {
+            return 'reading';
+        }
+
+        // Both answered (or radical with only meaning) - this shouldn't happen
+        // as we should have moved to next question, but return meaning as fallback
+        return 'meaning';
     }
 
     getQuestionText(questionType) {
@@ -435,33 +552,21 @@ class WanikaniAuralReviews {
         }
     }
 
-    playQuestion() {
-        if (!this.currentSubject) return;
-        
-        const questionText = this.elements.questionText.textContent;
-        let itemText = 'this item';
-        
-        if (this.currentSubject.characters) {
-            itemText = this.currentSubject.characters;
-        } else if (this.currentSubject.slug) {
-            itemText = this.currentSubject.slug;
-        }
-        
-        const fullText = `${questionText} ${itemText}`;
-        
-        this.speak(fullText);
-    }
-
-    speak(text) {
+    speak(text, onComplete, lang = 'en-US') {
         if (this.synthesis.speaking) {
             this.synthesis.cancel();
         }
-        
+
         const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = lang;
         utterance.rate = 0.8;
         utterance.pitch = 1;
         utterance.volume = 1;
-        
+
+        if (onComplete) {
+            utterance.onend = onComplete;
+        }
+
         this.synthesis.speak(utterance);
     }
 
@@ -470,6 +575,32 @@ class WanikaniAuralReviews {
             this.stopListening();
         } else {
             this.startListening();
+        }
+    }
+
+    toggleContinuousMode() {
+        this.continuousMode = !this.continuousMode;
+        const button = this.elements.continuousMode;
+
+        if (this.continuousMode) {
+            button.textContent = '🔄 Continuous Mode: ON';
+            button.className = 'btn btn-secondary active';
+            // Start continuous listening if not already listening
+            if (!this.isListening) {
+                this.startListening();
+            }
+        } else {
+            button.textContent = '🔄 Continuous Mode: OFF';
+            button.className = 'btn btn-secondary';
+            // Clear auto-advance timeout when turning off continuous mode
+            if (this.autoAdvanceTimeout) {
+                clearTimeout(this.autoAdvanceTimeout);
+                this.autoAdvanceTimeout = null;
+            }
+            // Stop listening when turning off continuous mode
+            if (this.isListening) {
+                this.stopListening();
+            }
         }
     }
 
@@ -496,8 +627,13 @@ class WanikaniAuralReviews {
         // Set a timeout to stop listening after 10 seconds
         this.listeningTimeout = setTimeout(() => {
             console.log('Speech recognition timeout');
-            this.elements.userAnswer.textContent = 'No speech detected. Please try again.';
-            this.stopListening();
+            if (this.continuousMode && !this.isPaused) {
+                // In continuous mode, just restart silently (onend will handle restart)
+                this.recognition.stop();
+            } else {
+                this.elements.userAnswer.textContent = 'No speech detected. Please try again.';
+                this.stopListening();
+            }
         }, 10000);
         
         this.recognition.start();
@@ -506,6 +642,7 @@ class WanikaniAuralReviews {
     stopListening() {
         console.log('Stopping speech recognition...');
         this.isListening = false;
+        // Don't reset continuousMode here - it should only be toggled by the user
         this.elements.listeningIndicator.style.display = 'none';
         
         // Reset button text based on question type
@@ -521,31 +658,100 @@ class WanikaniAuralReviews {
             this.listeningTimeout = null;
         }
         
+        if (this.continuousTimeout) {
+            clearTimeout(this.continuousTimeout);
+            this.continuousTimeout = null;
+        }
+        
         if (this.recognition) {
             this.recognition.stop();
         }
     }
 
+    restartContinuousListening() {
+        // Small delay before restarting to avoid immediate re-triggering
+        this.continuousTimeout = setTimeout(() => {
+            if (this.continuousMode && !this.isListening) {
+                this.startListening();
+            }
+        }, 1000);
+    }
+
     async processAnswer(userAnswer) {
         if (!this.currentSubject) return;
-        
+
+        // Prevent re-evaluation of already answered questions
+        if (this.answerLocked) {
+            console.log('Answer already evaluated, ignoring input');
+            return;
+        }
+
         // Check if we have a valid answer
         if (!userAnswer || userAnswer.trim() === '' || userAnswer === 'Listening...') {
             console.log('No valid answer received');
             this.elements.userAnswer.textContent = 'No answer detected. Please try again.';
             return;
         }
-        
+
+        // Lock answer evaluation and stop listening during feedback
+        this.answerLocked = true;
+        this.stopListening();
+
         const correctAnswers = this.getCorrectAnswers();
         console.log('User answer:', userAnswer);
         console.log('Correct answers:', correctAnswers);
         console.log('Question type:', this.currentQuestionType);
-        
+
         const isCorrect = await this.checkAnswer(userAnswer, correctAnswers);
         console.log('Answer correct:', isCorrect);
-        
+
+        // Update review state with this answer
+        this.recordAnswer(isCorrect);
+
         this.showResult(isCorrect, userAnswer, correctAnswers);
-        this.submitAnswer(isCorrect);
+
+        // Check if this assignment's review is complete and submit if so
+        await this.checkAndSubmitReview();
+    }
+
+    recordAnswer(isCorrect) {
+        if (!this.currentReviewState) return;
+
+        if (this.currentQuestionType === 'meaning') {
+            this.currentReviewState.meaningAnswered = true;
+            if (!isCorrect) {
+                this.currentReviewState.incorrectMeaningCount++;
+            }
+        } else if (this.currentQuestionType === 'reading') {
+            this.currentReviewState.readingAnswered = true;
+            if (!isCorrect) {
+                this.currentReviewState.incorrectReadingCount++;
+            }
+        }
+
+        console.log('Review state updated:', this.currentReviewState);
+    }
+
+    isReviewComplete() {
+        if (!this.currentReviewState) return false;
+
+        const state = this.currentReviewState;
+        const isRadical = state.subjectType === 'radical';
+
+        // Radicals only need meaning answered
+        if (isRadical) {
+            return state.meaningAnswered;
+        }
+
+        // Kanji and vocabulary need both meaning and reading
+        return state.meaningAnswered && state.readingAnswered;
+    }
+
+    async checkAndSubmitReview() {
+        if (this.isReviewComplete()) {
+            console.log('Review complete, submitting to WaniKani...');
+            await this.submitReview();
+        }
     }
 
     getCorrectAnswers() {
@@ -565,46 +771,140 @@ class WanikaniAuralReviews {
             if (this.currentSubject.readings && Array.isArray(this.currentSubject.readings)) {
                 answers.push(...this.currentSubject.readings
                     .filter(r => r && r.accepted_answer)
-                    .map(r => r.reading.toLowerCase()));
+                    .map(r => r.reading)); // Don't convert to lowercase for Japanese
             }
         }
         
         return answers;
     }
 
+    katakanaToHiragana(text) {
+        // Katakana to Hiragana: subtract 0x60 from character code
+        // Katakana range: U+30A1 to U+30F6
+        // Hiragana range: U+3041 to U+3096
+        return text.replace(/[\u30A1-\u30F6]/g, (char) => {
+            return String.fromCharCode(char.charCodeAt(0) - 0x60);
+        });
+    }
+
+    romajiToHiragana(text) {
+        const romaji = text.toLowerCase();
+
+        // Mapping from romaji to hiragana (ordered by length, longest first)
+        const mappings = [
+            // Four-character combinations
+            ['xtsu', 'っ'],
+
+            // Three-character combinations (combo syllables)
+            ['kya', 'きゃ'], ['kyu', 'きゅ'], ['kyo', 'きょ'],
+            ['sha', 'しゃ'], ['shu', 'しゅ'], ['sho', 'しょ'],
+            ['cha', 'ちゃ'], ['chu', 'ちゅ'], ['cho', 'ちょ'],
+            ['nya', 'にゃ'], ['nyu', 'にゅ'], ['nyo', 'にょ'],
+            ['hya', 'ひゃ'], ['hyu', 'ひゅ'], ['hyo', 'ひょ'],
+            ['mya', 'みゃ'], ['myu', 'みゅ'], ['myo', 'みょ'],
+            ['rya', 'りゃ'], ['ryu', 'りゅ'], ['ryo', 'りょ'],
+            ['gya', 'ぎゃ'], ['gyu', 'ぎゅ'], ['gyo', 'ぎょ'],
+            ['jya', 'じゃ'], ['jyu', 'じゅ'], ['jyo', 'じょ'],
+            ['bya', 'びゃ'], ['byu', 'びゅ'], ['byo', 'びょ'],
+            ['pya', 'ぴゃ'], ['pyu', 'ぴゅ'], ['pyo', 'ぴょ'],
+            ['shi', 'し'], ['chi', 'ち'], ['tsu', 'つ'], ['fou', 'ふぉ'],
+
+            // Two-character combinations
+            ['ka', 'か'], ['ki', 'き'], ['ku', 'く'], ['ke', 'け'], ['ko', 'こ'],
+            ['sa', 'さ'], ['si', 'し'], ['su', 'す'], ['se', 'せ'], ['so', 'そ'],
+            ['ta', 'た'], ['ti', 'ち'], ['tu', 'つ'], ['te', 'て'], ['to', 'と'],
+            ['na', 'な'], ['ni', 'に'], ['nu', 'ぬ'], ['ne', 'ね'], ['no', 'の'],
+            ['ha', 'は'], ['hi', 'ひ'], ['fu', 'ふ'], ['hu', 'ふ'], ['he', 'へ'], ['ho', 'ほ'],
+            ['ma', 'ま'], ['mi', 'み'], ['mu', 'む'], ['me', 'め'], ['mo', 'も'],
+            ['ya', 'や'], ['yu', 'ゆ'], ['yo', 'よ'],
+            ['ra', 'ら'], ['ri', 'り'], ['ru', 'る'], ['re', 'れ'], ['ro', 'ろ'],
+            ['wa', 'わ'], ['wi', 'ゐ'], ['we', 'ゑ'], ['wo', 'を'],
+            ['ga', 'が'], ['gi', 'ぎ'], ['gu', 'ぐ'], ['ge', 'げ'], ['go', 'ご'],
+            ['za', 'ざ'], ['ji', 'じ'], ['zi', 'じ'], ['zu', 'ず'], ['ze', 'ぜ'], ['zo', 'ぞ'],
+            ['da', 'だ'], ['di', 'ぢ'], ['du', 'づ'], ['de', 'で'], ['do', 'ど'],
+            ['ba', 'ば'], ['bi', 'び'], ['bu', 'ぶ'], ['be', 'べ'], ['bo', 'ぼ'],
+            ['pa', 'ぱ'], ['pi', 'ぴ'], ['pu', 'ぷ'], ['pe', 'ぺ'], ['po', 'ぽ'],
+            ['ja', 'じゃ'], ['ju', 'じゅ'], ['jo', 'じょ'],
+            ['fa', 'ふぁ'], ['fi', 'ふぃ'], ['fe', 'ふぇ'], ['fo', 'ふぉ'],
+            ['nn', 'ん'],
+
+            // Single vowels
+            ['a', 'あ'], ['i', 'い'], ['u', 'う'], ['e', 'え'], ['o', 'お'],
+
+            // Standalone n (handled specially below)
+        ];
+
+        let result = romaji;
+
+        // Handle double consonants (small tsu) - kk, tt, pp, ss, etc.
+        // Replace the first consonant of a double with っ
+        result = result.replace(/([kstpgzdbcfhjmrw])\1/g, 'っ$1');
+
+        // Apply mappings from longest to shortest
+        for (const [rom, hira] of mappings) {
+            result = result.split(rom).join(hira);
+        }
+
+        // Handle standalone 'n' at end of word or before non-vowel
+        // n followed by a vowel or y would have been converted already
+        result = result.replace(/n(?![aiueoy]|$)/g, 'ん');
+        result = result.replace(/n$/g, 'ん');
+
+        console.log(`Romaji to hiragana: "${text}" -> "${result}"`);
+        return result;
+    }
+
     async checkAnswer(userAnswer, correctAnswers) {
         const normalizedUserAnswer = userAnswer.toLowerCase().trim();
-        
+
         // Check direct matches first
         for (const correctAnswer of correctAnswers) {
             const normalizedCorrect = correctAnswer.toLowerCase().trim();
-            
+
             // Direct match
             if (normalizedUserAnswer === normalizedCorrect) {
                 return true;
             }
-            
-            // For Japanese readings, handle kanji to hiragana conversion
+
+            // For Japanese readings, handle katakana and kanji to hiragana conversion
             if (this.currentQuestionType === 'reading') {
                 // Check direct match (preserve hiragana/katakana)
                 if (userAnswer === correctAnswer) {
                     return true;
                 }
-                
+
+                // Convert katakana to hiragana
+                const userAsHiragana = this.katakanaToHiragana(userAnswer);
+                if (userAsHiragana === correctAnswer) {
+                    return true;
+                }
+
                 // Convert user's kanji answer to hiragana for comparison
                 const userHiragana = await this.convertToHiragana(userAnswer);
                 if (userHiragana === correctAnswer) {
                     return true;
                 }
+
+                // Also try converting the kanji result through katakana to hiragana
+                const userHiraganaFromKatakana = this.katakanaToHiragana(userHiragana);
+                if (userHiraganaFromKatakana === correctAnswer) {
+                    return true;
+                }
+
+                // Try converting romaji to hiragana
+                const userFromRomaji = this.romajiToHiragana(userAnswer);
+                if (userFromRomaji === correctAnswer) {
+                    return true;
+                }
             }
-            
+
             // Check for partial matches
             if (normalizedUserAnswer.includes(normalizedCorrect) ||
                 normalizedCorrect.includes(normalizedUserAnswer)) {
                 return true;
             }
         }
-        
+
         return false;
     }
 
@@ -723,32 +1023,67 @@ class WanikaniAuralReviews {
 
     showResult(isCorrect, userAnswer, correctAnswers) {
         this.elements.resultSection.style.display = 'block';
-        
+
+        const correctAnswerText = correctAnswers.join(', ');
+        console.log('Correct answers for display:', correctAnswers);
+        console.log('Question type:', this.currentQuestionType);
+
+        // Callback to advance after speech completes (for continuous mode)
+        const onSpeechComplete = () => {
+            if (this.continuousMode) {
+                // Small buffer before advancing to next question
+                setTimeout(() => {
+                    if (this.continuousMode) {
+                        this.nextQuestion();
+                    }
+                }, 500);
+            }
+        };
+
         if (isCorrect) {
             this.elements.resultMessage.textContent = '✅ Correct!';
             this.elements.resultMessage.className = 'result-message correct';
-            this.speak('Correct!');
+
+            // Speak "Correct" followed by the answer
+            if (this.currentQuestionType === 'reading') {
+                this.speak(`正解。${correctAnswerText}`, onSpeechComplete, 'ja-JP');
+            } else {
+                this.speak(`Correct. ${correctAnswerText}`, onSpeechComplete);
+            }
         } else {
-            this.elements.resultMessage.textContent = '❌ Incorrect';
+            this.elements.resultMessage.textContent = `❌ Incorrect: the answer is ${correctAnswerText}`;
             this.elements.resultMessage.className = 'result-message incorrect';
-            this.elements.correctAnswer.textContent = `Correct answer: ${correctAnswers.join(', ')}`;
-            this.speak(`Incorrect. The correct answer is ${correctAnswers.join(' or ')}`);
+            this.elements.correctAnswer.textContent = '';
+
+            // Speak the feedback with the correct answer
+            if (this.currentQuestionType === 'reading') {
+                this.speak(`ちがいます。正解は${correctAnswerText}です。`, onSpeechComplete, 'ja-JP');
+            } else {
+                this.speak(`Incorrect. The correct answer is ${correctAnswers.join(' or ')}`, onSpeechComplete);
+            }
         }
     }
 
-    async submitAnswer(isCorrect) {
+    async submitReview() {
+        if (!this.currentReviewState) {
+            console.error('No review state to submit');
+            return;
+        }
+
         try {
-            const assignment = this.currentReviews[this.currentReviewIndex];
+            const state = this.currentReviewState;
             const endpoint = `https://api.wanikani.com/v2/reviews`;
-            
+
             const payload = {
                 review: {
-                    assignment_id: assignment.id,
-                    incorrect_meaning_answers: this.currentQuestionType === 'meaning' && !isCorrect ? 1 : 0,
-                    incorrect_reading_answers: this.currentQuestionType === 'reading' && !isCorrect ? 1 : 0
+                    assignment_id: state.assignmentId,
+                    incorrect_meaning_answers: state.incorrectMeaningCount,
+                    incorrect_reading_answers: state.incorrectReadingCount
                 }
             };
-            
+
+            console.log('Submitting review:', payload);
+
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: {
@@ -758,29 +1093,55 @@ class WanikaniAuralReviews {
                 },
                 body: JSON.stringify(payload)
             });
-            
+
             if (!response.ok) {
-                console.error('Failed to submit answer:', response.status);
+                const errorText = await response.text();
+                console.error('Failed to submit review:', response.status, errorText);
+            } else {
+                console.log('Review submitted successfully');
             }
-            
+
         } catch (error) {
-            console.error('Error submitting answer:', error);
+            console.error('Error submitting review:', error);
         }
     }
 
     nextQuestion() {
-        this.currentReviewIndex++;
-        this.displayCurrentReview();
+        // Check if current assignment still needs more questions
+        if (!this.isReviewComplete()) {
+            // Same assignment, just show the next question type (reading after meaning)
+            this.resetAnswerSection();
+            const questionType = this.determineQuestionType();
+            this.elements.questionText.textContent = this.getQuestionText(questionType);
+            this.currentQuestionType = questionType;
+            this.updateProgress(); // Update to show (reading) indicator
+            this.speakQuestionType(questionType); // Speak the question type
+        } else {
+            // Move to next assignment
+            this.currentReviewIndex++;
+            this.currentReviewState = null; // Clear state for next assignment
+            this.displayCurrentReview();
+        }
     }
 
     togglePause() {
         this.isPaused = !this.isPaused;
         this.elements.pauseReviews.textContent = this.isPaused ? 'Resume Reviews' : 'Pause Reviews';
-        
+
         if (this.isPaused) {
+            // Stop listening when paused
+            this.stopListening();
             this.speak('Reviews paused');
         } else {
             this.speak('Reviews resumed');
+            // Restart listening if in continuous mode
+            if (this.continuousMode && !this.isListening) {
+                setTimeout(() => {
+                    if (this.continuousMode && !this.isPaused && !this.isListening) {
+                        this.startListening();
+                    }
+                }, 1000);
+            }
         }
     }
 
@@ -809,14 +1170,45 @@ class WanikaniAuralReviews {
     updateProgress() {
         const progress = ((this.currentReviewIndex + 1) / this.currentReviews.length) * 100;
         this.elements.progressFill.style.width = `${progress}%`;
-        this.elements.progressText.textContent = `${this.currentReviewIndex + 1} / ${this.currentReviews.length}`;
+
+        // Show which part of the review we're on
+        let questionPart = '';
+        if (this.currentReviewState) {
+            const isRadical = this.currentReviewState.subjectType === 'radical';
+            if (!this.currentReviewState.meaningAnswered) {
+                questionPart = isRadical ? '' : ' (meaning)';
+            } else if (!this.currentReviewState.readingAnswered && !isRadical) {
+                questionPart = ' (reading)';
+            }
+        }
+
+        this.elements.progressText.textContent = `${this.currentReviewIndex + 1} / ${this.currentReviews.length}${questionPart}`;
     }
 
     resetAnswerSection() {
         this.elements.resultSection.style.display = 'none';
         this.elements.userAnswer.textContent = '';
         this.elements.correctAnswer.textContent = '';
+
+        // Unlock answer evaluation for new question
+        this.answerLocked = false;
+
+        // Clear any pending auto-advance
+        if (this.autoAdvanceTimeout) {
+            clearTimeout(this.autoAdvanceTimeout);
+            this.autoAdvanceTimeout = null;
+        }
+
         this.stopListening();
+
+        // Auto-start listening in continuous mode after a short delay
+        if (this.continuousMode && !this.isPaused) {
+            setTimeout(() => {
+                if (this.continuousMode && !this.isListening && !this.isPaused) {
+                    this.startListening();
+                }
+            }, 500);
+        }
     }
 }
 
