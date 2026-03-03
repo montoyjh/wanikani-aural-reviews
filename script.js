@@ -1,3 +1,6 @@
+import Kuroshiro from 'kuroshiro';
+import KuromojiAnalyzer from 'kuroshiro-analyzer-kuromoji';
+
 class WanikaniAuralReviews {
     constructor() {
         this.apiToken = localStorage.getItem('wanikani_api_token');
@@ -188,41 +191,25 @@ class WanikaniAuralReviews {
     }
 
     async initializeKuroshiro() {
-        // Prevent multiple initialization attempts
         if (this.kuroshiroInitialized || this.kuroshiroInitializing) {
             return;
         }
 
         try {
-            if (typeof Kuroshiro === 'undefined' || typeof KuromojiAnalyzer === 'undefined') {
-                console.warn('Kuroshiro libraries not loaded, falling back to local conversion');
-                return;
-            }
-
             this.kuroshiroInitializing = true;
-            console.log('Initializing Kuroshiro (this may take a moment)...');
+            console.log('Initializing Kuroshiro...');
 
-            // Kuroshiro is an ES module, so we need to use .default
-            this.kuroshiro = new Kuroshiro.default();
+            this.kuroshiro = new Kuroshiro();
 
-            // Initialize with kuromoji analyzer using CDN dictionary path
-            // Wrap in a timeout to prevent infinite hangs
-            const initPromise = this.kuroshiro.init(new KuromojiAnalyzer({
-                dictPath: "https://unpkg.com/kuromoji@0.1.2/dict/"
+            await this.kuroshiro.init(new KuromojiAnalyzer({
+                dictPath: 'https://unpkg.com/kuromoji@0.1.2/dict/'
             }));
-
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Kuroshiro initialization timeout')), 30000);
-            });
-
-            await Promise.race([initPromise, timeoutPromise]);
 
             this.kuroshiroInitialized = true;
             this.kuroshiroInitializing = false;
             console.log('Kuroshiro initialized successfully');
         } catch (error) {
             console.error('Failed to initialize Kuroshiro:', error);
-            this.kuroshiroInitialized = false;
             this.kuroshiroInitializing = false;
         }
     }
