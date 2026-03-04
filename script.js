@@ -19,6 +19,9 @@ class WanikaniAuralReviews {
 
         // Prevent re-evaluation of already answered questions
         this.answerLocked = false;
+
+        // Awaiting confirmation before submitting review with incorrect answers
+        this.awaitingSubmitConfirmation = false;
         
         // Local data cache
         this.kanjiData = new Map(); // character -> { readings: [], meanings: [] }
@@ -34,7 +37,8 @@ class WanikaniAuralReviews {
         this.initializeSpeechRecognition();
         this.initializeEventListeners();
 
-        // Kuroshiro is now lazy-loaded when needed to avoid blocking page load
+        // Start Kuroshiro initialization early (non-blocking)
+        this.initializeKuroshiro();
 
         if (this.apiToken) {
             this.loadWanikaniData().then(() => {
@@ -65,6 +69,10 @@ class WanikaniAuralReviews {
             resultSection: document.getElementById('resultSection'),
             resultMessage: document.getElementById('resultMessage'),
             correctAnswer: document.getElementById('correctAnswer'),
+            confirmationButtons: document.getElementById('confirmationButtons'),
+            confirmIncorrect: document.getElementById('confirmIncorrect'),
+            confirmCorrect: document.getElementById('confirmCorrect'),
+            confirmSkip: document.getElementById('confirmSkip'),
             nextQuestion: document.getElementById('nextQuestion'),
             pauseReviews: document.getElementById('pauseReviews'),
             changeApiToken: document.getElementById('changeApiToken'),
@@ -108,7 +116,14 @@ class WanikaniAuralReviews {
                     console.log('Ignoring short utterance:', transcript);
                     return;
                 }
-                
+
+                // Check if we're waiting for submission confirmation
+                if (this.awaitingSubmitConfirmation) {
+                    this.elements.userAnswer.textContent = transcript;
+                    this.handleConfirmationVoiceCommand(transcript);
+                    return;
+                }
+
                 // For Japanese reading questions, convert kanji to hiragana for display
                 if (this.currentQuestionType === 'reading') {
                     try {
@@ -122,7 +137,7 @@ class WanikaniAuralReviews {
                 } else {
                     this.elements.userAnswer.textContent = transcript;
                 }
-                
+
                 this.processAnswer(transcript);
                 
                 // In continuous mode, restart listening after processing
@@ -135,17 +150,35 @@ class WanikaniAuralReviews {
                 console.error('Speech recognition error:', event.error);
                 // Don't show error for no-speech, just silently handle it
                 if (event.error === 'no-speech') {
-                    // In continuous mode, we'll restart via onend with a delay
-                    // Don't spam the user with error messages
                     console.log('No speech detected, will retry...');
-                } else {
+                    // If awaiting confirmation, restart confirmation listening
+                    if (this.awaitingSubmitConfirmation) {
+                        setTimeout(() => this.startConfirmationListening(), 500);
+                        return;
+                    }
+                } else if (event.error !== 'aborted') {
                     this.elements.userAnswer.textContent = `Error: ${event.error}`;
                 }
-                this.stopListening();
+                if (!this.awaitingSubmitConfirmation) {
+                    this.stopListening();
+                }
             };
-            
+
             this.recognition.onend = () => {
                 console.log('Speech recognition ended');
+
+                // If awaiting confirmation, keep listening for commands
+                if (this.awaitingSubmitConfirmation) {
+                    this.isListening = false;
+                    this.elements.listeningIndicator.style.display = 'none';
+                    setTimeout(() => {
+                        if (this.awaitingSubmitConfirmation) {
+                            this.startConfirmationListening();
+                        }
+                    }, 500);
+                    return;
+                }
+
                 // In continuous mode, restart listening instead of stopping
                 // But respect paused state and answer lock
                 if (this.continuousMode && !this.isPaused && !this.answerLocked) {
@@ -188,6 +221,17 @@ class WanikaniAuralReviews {
         if (this.elements.clearApiToken) {
             this.elements.clearApiToken.addEventListener('click', () => this.clearApiToken());
         }
+
+        // Confirmation buttons for incorrect answers
+        if (this.elements.confirmIncorrect) {
+            this.elements.confirmIncorrect.addEventListener('click', () => this.confirmAnswer('incorrect'));
+        }
+        if (this.elements.confirmCorrect) {
+            this.elements.confirmCorrect.addEventListener('click', () => this.confirmAnswer('correct'));
+        }
+        if (this.elements.confirmSkip) {
+            this.elements.confirmSkip.addEventListener('click', () => this.confirmAnswer('skip'));
+        }
     }
 
     async initializeKuroshiro() {
@@ -200,7 +244,6 @@ class WanikaniAuralReviews {
             console.log('Initializing Kuroshiro...');
 
             this.kuroshiro = new Kuroshiro();
-
             await this.kuroshiro.init(new KuromojiAnalyzer({
                 dictPath: 'https://unpkg.com/kuromoji@0.1.2/dict/'
             }));
@@ -500,20 +543,20 @@ class WanikaniAuralReviews {
     speakQuestionType(questionType) {
         // Speak just "meaning" or "reading"
         const text = questionType === 'meaning' ? 'meaning' : 'reading';
+        console.log('Speaking question type:', text);
 
-        // After speech completes, wait a buffer then start listening (if in continuous mode)
-        const onSpeechComplete = () => {
-            if (this.continuousMode && !this.isPaused && !this.isListening) {
-                // Add buffer after speech before listening starts
-                setTimeout(() => {
-                    if (this.continuousMode && !this.isPaused && !this.isListening && !this.answerLocked) {
-                        this.startListening();
-                    }
-                }, 800);
-            }
-        };
+        // Speak the question type
+        this.speak(text);
 
-        this.speak(text, onSpeechComplete);
+        // Start listening after a delay (don't rely on speech callback)
+        if (this.continuousMode && !this.isPaused) {
+            setTimeout(() => {
+                console.log('Starting listening after question type speech');
+                if (this.continuousMode && !this.isPaused && !this.isListening && !this.answerLocked) {
+                    this.startListening();
+                }
+            }, 1500); // 1.5 second delay for speech to complete
+        }
     }
 
     determineQuestionType() {
@@ -553,6 +596,8 @@ class WanikaniAuralReviews {
     }
 
     speak(text, onComplete, lang = 'en-US') {
+        console.log('Speaking:', text, 'lang:', lang);
+
         if (this.synthesis.speaking) {
             this.synthesis.cancel();
         }
@@ -563,8 +608,39 @@ class WanikaniAuralReviews {
         utterance.pitch = 1;
         utterance.volume = 1;
 
+        // Log when speech actually starts
+        utterance.onstart = () => {
+            console.log('Speech started:', text);
+        };
+
+        let callbackFired = false;
+
         if (onComplete) {
-            utterance.onend = onComplete;
+            utterance.onend = () => {
+                if (!callbackFired) {
+                    callbackFired = true;
+                    console.log('Speech onend fired');
+                    onComplete();
+                }
+            };
+
+            utterance.onerror = (event) => {
+                console.error('Speech synthesis error:', event);
+                if (!callbackFired) {
+                    callbackFired = true;
+                    onComplete();
+                }
+            };
+
+            // Fallback timeout in case onend doesn't fire (known browser issue)
+            const estimatedDuration = Math.max(text.length * 100, 2000); // rough estimate
+            setTimeout(() => {
+                if (!callbackFired && !this.synthesis.speaking) {
+                    console.log('Speech fallback timeout fired');
+                    callbackFired = true;
+                    onComplete();
+                }
+            }, estimatedDuration);
         }
 
         this.synthesis.speak(utterance);
@@ -705,13 +781,11 @@ class WanikaniAuralReviews {
         const isCorrect = await this.checkAnswer(userAnswer, correctAnswers);
         console.log('Answer correct:', isCorrect);
 
-        // Update review state with this answer
+        // Always record the answer
         this.recordAnswer(isCorrect);
 
+        // Show result - checkAndSubmitReview will be called after speech completes
         this.showResult(isCorrect, userAnswer, correctAnswers);
-
-        // Check if this assignment's review is complete and submit if so
-        await this.checkAndSubmitReview();
     }
 
     recordAnswer(isCorrect) {
@@ -748,10 +822,76 @@ class WanikaniAuralReviews {
     }
 
     async checkAndSubmitReview() {
-        if (this.isReviewComplete()) {
-            console.log('Review complete, submitting to WaniKani...');
+        if (!this.isReviewComplete()) {
+            return;
+        }
+
+        const state = this.currentReviewState;
+        const hasIncorrectAnswers = state.incorrectMeaningCount > 0 || state.incorrectReadingCount > 0;
+
+        if (hasIncorrectAnswers) {
+            // Show confirmation before submitting
+            console.log('Review has incorrect answers, awaiting confirmation...');
+            this.showSubmitConfirmation();
+        } else {
+            // All correct, submit immediately
+            console.log('Review complete with all correct, submitting to WaniKani...');
             await this.submitReview();
         }
+    }
+
+    showSubmitConfirmation() {
+        this.awaitingSubmitConfirmation = true;
+        this.answerLocked = true;
+
+        const state = this.currentReviewState;
+        const meaningErrors = state.incorrectMeaningCount;
+        const readingErrors = state.incorrectReadingCount;
+
+        // Add confirmation prompt below the existing result (don't replace it)
+        this.elements.correctAnswer.textContent = `📝 Submit review? (${meaningErrors} meaning error${meaningErrors !== 1 ? 's' : ''}, ${readingErrors} reading error${readingErrors !== 1 ? 's' : ''})`;
+        this.elements.confirmationButtons.style.display = 'block';
+        this.elements.nextQuestion.style.display = 'none';
+
+        // Speak the confirmation prompt
+        console.log('Showing submit confirmation, speaking prompt...');
+        this.speak('Submit incorrect?');
+
+        // Start listening after a delay (don't rely on speech callback)
+        setTimeout(() => {
+            console.log('Starting confirmation listening after delay');
+            this.startConfirmationListening();
+        }, 2000);
+    }
+
+    startConfirmationListening() {
+        if (!this.recognition) return;
+        if (!this.awaitingSubmitConfirmation) return;
+
+        // Stop any existing recognition first
+        try {
+            this.recognition.stop();
+        } catch (e) {
+            // Ignore errors from stopping
+        }
+
+        // Set to English for voice commands
+        this.recognition.lang = 'en-US';
+        console.log('Listening for confirmation command...');
+        this.elements.userAnswer.textContent = 'Listening for: "yes", "no", or "submit correct"...';
+
+        // Small delay before starting to avoid conflicts
+        setTimeout(() => {
+            if (this.awaitingSubmitConfirmation) {
+                try {
+                    this.recognition.start();
+                } catch (e) {
+                    console.log('Recognition start error, retrying...', e);
+                    // Retry after a delay
+                    setTimeout(() => this.startConfirmationListening(), 500);
+                }
+            }
+        }, 100);
     }
 
     getCorrectAnswers() {
@@ -1029,22 +1169,16 @@ class WanikaniAuralReviews {
 
     showResult(isCorrect, userAnswer, correctAnswers) {
         this.elements.resultSection.style.display = 'block';
+        this.elements.confirmationButtons.style.display = 'none';
+        this.elements.nextQuestion.style.display = 'block';
+
+        // Reset confirmation state - only set to true when full review is complete with errors
+        this.awaitingSubmitConfirmation = false;
 
         const correctAnswerText = correctAnswers.join(', ');
         console.log('Correct answers for display:', correctAnswers);
         console.log('Question type:', this.currentQuestionType);
-
-        // Callback to advance after speech completes (for continuous mode)
-        const onSpeechComplete = () => {
-            if (this.continuousMode) {
-                // Small buffer before advancing to next question
-                setTimeout(() => {
-                    if (this.continuousMode) {
-                        this.nextQuestion();
-                    }
-                }, 500);
-            }
-        };
+        console.log('Review complete?', this.isReviewComplete());
 
         if (isCorrect) {
             this.elements.resultMessage.textContent = '✅ Correct!';
@@ -1052,9 +1186,9 @@ class WanikaniAuralReviews {
 
             // Speak "Correct" followed by the answer
             if (this.currentQuestionType === 'reading') {
-                this.speak(`正解。${correctAnswerText}`, onSpeechComplete, 'ja-JP');
+                this.speak(`正解。${correctAnswerText}`, null, 'ja-JP');
             } else {
-                this.speak(`Correct. ${correctAnswerText}`, onSpeechComplete);
+                this.speak(`Correct. ${correctAnswerText}`);
             }
         } else {
             this.elements.resultMessage.textContent = `❌ Incorrect: the answer is ${correctAnswerText}`;
@@ -1063,16 +1197,141 @@ class WanikaniAuralReviews {
 
             // Speak the feedback with the correct answer
             if (this.currentQuestionType === 'reading') {
-                this.speak(`ちがいます。正解は${correctAnswerText}です。`, onSpeechComplete, 'ja-JP');
+                this.speak(`ちがいます。正解は${correctAnswerText}です。`, null, 'ja-JP');
             } else {
-                this.speak(`Incorrect. The correct answer is ${correctAnswers.join(' or ')}`, onSpeechComplete);
+                this.speak(`Incorrect. The correct answer is ${correctAnswers.join(' or ')}`);
             }
+        }
+
+        // Handle what happens next (independent of speech completion)
+        this.handlePostAnswer();
+    }
+
+    async handlePostAnswer() {
+        // Wait for speech to play (approximate duration)
+        const speechDelay = 2500;
+
+        setTimeout(async () => {
+            // Check if review is complete and needs confirmation
+            if (this.isReviewComplete()) {
+                const state = this.currentReviewState;
+                const hasIncorrectAnswers = state && (state.incorrectMeaningCount > 0 || state.incorrectReadingCount > 0);
+
+                if (hasIncorrectAnswers) {
+                    // Show confirmation before submitting
+                    console.log('Review has incorrect answers, showing confirmation...');
+                    this.showSubmitConfirmation();
+                    return;
+                } else {
+                    // All correct, submit immediately
+                    console.log('Review complete with all correct, submitting...');
+                    await this.submitReview();
+                    // Move to next assignment
+                    this.currentReviewIndex++;
+                    this.currentReviewState = null;
+                    this.displayCurrentReview();
+                    return;
+                }
+            }
+
+            // Not complete yet, auto-advance in continuous mode
+            console.log('Review not complete, continuous mode:', this.continuousMode);
+            if (this.continuousMode) {
+                console.log('Auto-advancing to next question');
+                this.nextQuestion();
+            }
+        }, speechDelay);
+    }
+
+    handleConfirmationVoiceCommand(transcript) {
+        console.log('Processing confirmation voice command:', transcript);
+
+        // Normalize the transcript
+        const command = transcript.toLowerCase().trim();
+
+        // Check for "yes" command
+        if (command === 'yes' || command.includes('yes')) {
+            this.confirmAnswer('incorrect');
+            return;
+        }
+
+        // Check for "no" command
+        if (command === 'no' || command.includes('no')) {
+            this.confirmAnswer('skip');
+            return;
+        }
+
+        // Check for "submit correct" command
+        if (command.includes('submit correct') || command.includes('correct')) {
+            this.confirmAnswer('correct');
+            return;
+        }
+
+        // Unrecognized command, prompt again
+        console.log('Unrecognized confirmation command:', command);
+        this.elements.userAnswer.textContent = `"${transcript}" - Say "yes", "no", or "submit correct"`;
+
+        // The onend handler will automatically restart listening
+    }
+
+    async confirmAnswer(choice) {
+        console.log('User confirmed submission:', choice);
+
+        // Clear confirmation state
+        this.awaitingSubmitConfirmation = false;
+        this.stopListening();
+
+        // Hide confirmation buttons
+        this.elements.confirmationButtons.style.display = 'none';
+        this.elements.nextQuestion.style.display = 'block';
+
+        switch (choice) {
+            case 'incorrect':
+                // Submit with incorrect counts as recorded
+                console.log('Submitting review with incorrect answers...');
+                this.speak('Submitting as incorrect.');
+                await this.submitReview();
+                // Move to next assignment
+                this.currentReviewIndex++;
+                this.currentReviewState = null;
+                this.displayCurrentReview();
+                break;
+
+            case 'correct':
+                // Reset incorrect counts to 0, then submit
+                console.log('Submitting review as all correct...');
+                if (this.currentReviewState) {
+                    this.currentReviewState.incorrectMeaningCount = 0;
+                    this.currentReviewState.incorrectReadingCount = 0;
+                }
+                this.speak('Submitting as correct.');
+                await this.submitReview();
+                // Move to next assignment
+                this.currentReviewIndex++;
+                this.currentReviewState = null;
+                this.displayCurrentReview();
+                break;
+
+            case 'skip':
+                // Don't submit, just move to next assignment
+                console.log('Skipping submission, moving to next assignment...');
+                this.speak('Skipped.');
+                this.currentReviewIndex++;
+                this.currentReviewState = null;
+                this.displayCurrentReview();
+                break;
         }
     }
 
     async submitReview() {
         if (!this.currentReviewState) {
             console.error('No review state to submit');
+            return;
+        }
+
+        // Check if user chose to skip this item
+        if (this.currentReviewState.skipSubmission) {
+            console.log('Skipping submission for this item (user requested skip)');
             return;
         }
 
@@ -1195,9 +1454,12 @@ class WanikaniAuralReviews {
         this.elements.resultSection.style.display = 'none';
         this.elements.userAnswer.textContent = '';
         this.elements.correctAnswer.textContent = '';
+        this.elements.confirmationButtons.style.display = 'none';
+        this.elements.nextQuestion.style.display = 'block';
 
         // Unlock answer evaluation for new question
         this.answerLocked = false;
+        this.awaitingSubmitConfirmation = false;
 
         // Clear any pending auto-advance
         if (this.autoAdvanceTimeout) {
