@@ -436,7 +436,10 @@ body {
     }
     
     .item-character {
-        font-size: 3rem;
+        font-size: 20vw;
+        width: 80%;
+        margin: 0 auto;
+        word-break: keep-all;
     }
 }
 
