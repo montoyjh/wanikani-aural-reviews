@@ -302,8 +302,10 @@ class WanikaniAuralReviews {
             console.log('Initializing Kuroshiro...');
 
             this.kuroshiro = new Kuroshiro();
+            // Use variable to prevent Vite from transforming the URL
+            const dictUrl = 'https:/' + '/unpkg.com/kuromoji@0.1.2/dict/';
             await this.kuroshiro.init(new KuromojiAnalyzer({
-                dictPath: 'https://unpkg.com/kuromoji@0.1.2/dict/'
+                dictPath: dictUrl
             }));
 
             this.kuroshiroInitialized = true;
