@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import path from 'path';
 
 export default defineConfig({
   base: '/wanikani-aural-reviews/',
@@ -7,7 +8,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      path: 'path-browserify',
+      path: path.resolve(__dirname, 'path-shim.js'),
     },
   },
 });
