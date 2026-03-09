@@ -120,7 +120,7 @@ class WanikaniAuralReviews {
                 }
 
                 // Filter out very short utterances (likely noise)
-                if (transcript.length < 2) {
+                if (transcript.length < 1) {
                     console.log('Ignoring short utterance:', transcript);
                     return;
                 }
