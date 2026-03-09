@@ -524,8 +524,9 @@ class WanikaniAuralReviews {
         }
 
         const data = await response.json();
-        console.log('Fetched subject data:', data.data); // Debug log
-        return data.data;
+        console.log('Fetched subject data:', data); // Debug log
+        // Merge object type into data for easier access
+        return { ...data.data, object: data.object };
     }
 
     displayCurrentReview() {
@@ -566,11 +567,17 @@ class WanikaniAuralReviews {
             }
 
             // Update review state with subject type
+            const subjectType = subject.object; // 'radical', 'kanji', or 'vocabulary'
             if (this.currentReviewState) {
-                this.currentReviewState.subjectType = subject.object; // 'radical', 'kanji', or 'vocabulary'
+                this.currentReviewState.subjectType = subjectType;
             }
 
-            this.elements.itemType.textContent = subject.object || 'Unknown';
+            // Set item type text and color class
+            console.log('Subject type:', subjectType);
+            this.elements.itemType.textContent = subjectType || 'Unknown';
+            this.elements.itemType.className = 'item-type ' + (subjectType || '');
+            this.elements.itemCharacter.className = 'item-character ' + (subjectType || '');
+            console.log('Item character class:', this.elements.itemCharacter.className);
 
             // Handle different subject types (radicals, kanji, vocabulary)
             let characters = 'N/A';
@@ -604,8 +611,15 @@ class WanikaniAuralReviews {
             return;
         }
 
-        // Speak just "meaning" or "reading"
-        const text = questionType === 'meaning' ? 'meaning' : 'reading';
+        // Get subject type for speech (shorten "vocabulary" to "vocab")
+        let subjectType = this.currentReviewState?.subjectType || '';
+        if (subjectType === 'vocabulary') {
+            subjectType = 'vocab';
+        }
+
+        // Speak "[subject type] meaning" or "[subject type] reading"
+        const questionWord = questionType === 'meaning' ? 'meaning' : 'reading';
+        const text = subjectType ? `${subjectType} ${questionWord}` : questionWord;
         console.log('Speaking question type:', text);
 
         // Speak the question type, then start listening when complete

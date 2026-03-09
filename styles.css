@@ -152,21 +152,51 @@ body {
 
 .item-type {
     font-size: 0.9rem;
-    color: #666;
+    color: white;
     text-transform: uppercase;
     letter-spacing: 1px;
     margin-bottom: 10px;
+    padding: 5px 15px;
+    border-radius: 5px;
+    display: inline-block;
+}
+
+.item-type.radical {
+    background: #00AAFF;
+}
+
+.item-type.kanji {
+    background: #FF00AA;
+}
+
+.item-type.vocabulary {
+    background: #9933FF;
 }
 
 .item-character {
     font-size: 4rem;
     font-weight: 700;
-    color: #333;
+    color: white;
     margin-bottom: 20px;
     min-height: 80px;
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 20px 40px;
+    border-radius: 10px;
+    background: #666;
+}
+
+.item-character.radical {
+    background: #00AAFF !important;
+}
+
+.item-character.kanji {
+    background: #FF00AA !important;
+}
+
+.item-character.vocabulary {
+    background: #9933FF !important;
 }
 
 .question-section {
