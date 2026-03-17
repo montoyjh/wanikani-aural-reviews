@@ -507,8 +507,14 @@ class WanikaniAuralReviews {
         }
 
         const data = await response.json();
-        this.currentReviews = data.data || [];
+        const allReviews = data.data || [];
+
+        // Limit to first 100 reviews to reduce loading overhead
+        this.totalAvailableReviews = allReviews.length;
+        this.currentReviews = allReviews.slice(0, 100);
         this.currentReviewIndex = 0;
+
+        console.log(`Loaded ${this.currentReviews.length} of ${this.totalAvailableReviews} available reviews`);
     }
 
     async fetchSubject(subjectId) {
@@ -1584,7 +1590,12 @@ class WanikaniAuralReviews {
             }
         }
 
-        this.elements.progressText.textContent = `${this.currentReviewIndex + 1} / ${this.currentReviews.length}${questionPart}`;
+        // Show progress with total available if more than loaded
+        let progressText = `${this.currentReviewIndex + 1} / ${this.currentReviews.length}`;
+        if (this.totalAvailableReviews && this.totalAvailableReviews > this.currentReviews.length) {
+            progressText += ` (${this.totalAvailableReviews} total)`;
+        }
+        this.elements.progressText.textContent = progressText + questionPart;
     }
 
     resetAnswerSection() {
