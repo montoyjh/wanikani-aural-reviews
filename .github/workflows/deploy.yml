@@ -18,20 +18,48 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
           cache: 'npm'
 
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Build production (main)
+        run: |
+          VITE_BASE_PATH=/wanikani-aural-reviews/ npm run build
+          mkdir -p deploy
+          cp -r dist/* deploy/
+
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
         with:
-          path: './dist'
+          ref: staging
+          clean: false
+
+      - name: Install dependencies for staging
+        run: npm ci
+
+      - name: Build staging
+        run: |
+          VITE_BASE_PATH=/wanikani-aural-reviews/staging/ npm run build
+          mkdir -p deploy/staging
+          cp -r dist/* deploy/staging/
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './deploy'
 
   deploy:
     environment:

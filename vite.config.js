@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import path from 'path';
 
 export default defineConfig({
-  base: '/wanikani-aural-reviews/',
+  base: process.env.VITE_BASE_PATH || '/wanikani-aural-reviews/',
   build: {
     outDir: 'dist',
   },
