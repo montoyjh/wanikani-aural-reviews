@@ -104,6 +104,52 @@ body {
     text-decoration: underline;
 }
 
+.setup-options {
+    margin-top: 24px;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.setup-label {
+    font-size: 0.85rem;
+    color: #555;
+    font-weight: 500;
+}
+
+.setup-select {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 2px solid #e1e5e9;
+    font-size: 0.95rem;
+    background: #fff;
+}
+
+.inline-settings {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    background: rgba(255, 255, 255, 0.15);
+    padding: 10px 14px;
+    border-radius: 12px;
+    color: #fff;
+    font-size: 0.85rem;
+}
+
+.inline-settings label {
+    font-weight: 500;
+    opacity: 0.95;
+}
+
+.inline-settings .setup-select {
+    border-color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.95);
+    color: #333;
+    min-width: 7rem;
+}
+
 /* Review Interface */
 .review-interface {
     flex: 1;
@@ -394,6 +440,7 @@ body {
     gap: 15px;
     justify-content: center;
     flex-wrap: wrap;
+    align-items: center;
 }
 
 /* Loading */

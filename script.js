@@ -37,9 +37,15 @@ class WanikaniAuralReviews {
         this.kuroshiroInitialized = false;
         this.kuroshiroInitializing = false;
 
+        this.reviewOrder = localStorage.getItem('wanikani_review_order') || 'random';
+        this.uiLanguage = localStorage.getItem('wanikani_ui_language') || 'en';
+        this.burnedPracticeCount = 5;
+
         this.initializeElements();
+        this.syncSettingsFormsFromStorage();
         this.initializeSpeechRecognition();
         this.initializeEventListeners();
+        this.applyUiLanguageToLiveControls();
 
         // Start Kuroshiro initialization early (non-blocking)
         this.initializeKuroshiro();
@@ -82,8 +88,160 @@ class WanikaniAuralReviews {
             changeApiToken: document.getElementById('changeApiToken'),
             endSession: document.getElementById('endSession'),
             retryButton: document.getElementById('retryButton'),
-            errorMessage: document.getElementById('errorMessage')
+            errorMessage: document.getElementById('errorMessage'),
+            reviewOrder: document.getElementById('reviewOrder'),
+            uiLanguage: document.getElementById('uiLanguage'),
+            reviewOrderInline: document.getElementById('reviewOrderInline'),
+            uiLanguageInline: document.getElementById('uiLanguageInline'),
+            confirmationPrompt: document.getElementById('confirmationPrompt')
         };
+    }
+
+    syncSettingsFormsFromStorage() {
+        if (this.elements.reviewOrder) {
+            this.elements.reviewOrder.value = this.reviewOrder === 'sequential' ? 'sequential' : 'random';
+        }
+        if (this.elements.reviewOrderInline) {
+            this.elements.reviewOrderInline.value = this.reviewOrder === 'sequential' ? 'sequential' : 'random';
+        }
+        if (this.elements.uiLanguage) {
+            this.elements.uiLanguage.value = this.uiLanguage === 'ja' ? 'ja' : 'en';
+        }
+        if (this.elements.uiLanguageInline) {
+            this.elements.uiLanguageInline.value = this.uiLanguage === 'ja' ? 'ja' : 'en';
+        }
+    }
+
+    persistReviewOrder(value) {
+        this.reviewOrder = value === 'sequential' ? 'sequential' : 'random';
+        localStorage.setItem('wanikani_review_order', this.reviewOrder);
+        this.syncSettingsFormsFromStorage();
+    }
+
+    persistUiLanguage(value) {
+        this.uiLanguage = value === 'ja' ? 'ja' : 'en';
+        localStorage.setItem('wanikani_ui_language', this.uiLanguage);
+        this.syncSettingsFormsFromStorage();
+        this.applyUiLanguageToLiveControls();
+        if (this.elements.questionText && this.currentQuestionType) {
+            this.elements.questionText.textContent = this.getQuestionText(this.currentQuestionType);
+        }
+        if (this.awaitingSubmitConfirmation) {
+            this.refreshSubmitConfirmationLabels();
+        }
+    }
+
+    isJapaneseUi() {
+        return this.uiLanguage === 'ja';
+    }
+
+    applyUiLanguageToLiveControls() {
+        const ja = this.isJapaneseUi();
+        if (this.elements.pauseReviews) {
+            this.elements.pauseReviews.textContent = ja
+                ? (this.isPaused ? '再開' : '一時停止')
+                : (this.isPaused ? 'Resume Reviews' : 'Pause Reviews');
+        }
+        if (this.elements.changeApiToken) {
+            this.elements.changeApiToken.textContent = ja ? 'APIトークンを変更' : 'Change API Token';
+        }
+        if (this.elements.endSession) {
+            this.elements.endSession.textContent = ja ? 'セッション終了' : 'End Session';
+        }
+        if (!this.isListening && this.elements.startListening) {
+            if (this.currentQuestionType === 'reading') {
+                this.elements.startListening.textContent = ja ? '🎤 話す（日本語）' : '🎤 Start Speaking (Japanese)';
+            } else {
+                this.elements.startListening.textContent = ja ? '🎤 話す（英語）' : '🎤 Start Speaking (English)';
+            }
+        }
+        if (this.elements.continuousMode) {
+            const on = this.continuousMode;
+            this.elements.continuousMode.textContent = ja
+                ? (on ? '🔄 連続モード：オン' : '🔄 連続モード：オフ')
+                : (on ? '🔄 Continuous Mode: ON' : '🔄 Continuous Mode: OFF');
+        }
+        if (this.elements.nextQuestion) {
+            this.elements.nextQuestion.textContent = ja ? '次へ' : 'Next Question';
+        }
+    }
+
+    getMicButtonLabel() {
+        const ja = this.isJapaneseUi();
+        if (this.currentQuestionType === 'reading') {
+            return ja ? '🎤 話す（日本語）' : '🎤 Start Speaking (Japanese)';
+        }
+        return ja ? '🎤 話す（英語）' : '🎤 Start Speaking (English)';
+    }
+
+    refreshSubmitConfirmationLabels() {
+        if (!this.elements.confirmationPrompt || !this.currentReviewState) return;
+
+        const state = this.currentReviewState;
+        const meaningErrors = state.incorrectMeaningCount;
+        const readingErrors = state.incorrectReadingCount;
+
+        if (this.isJapaneseUi()) {
+            this.elements.confirmationPrompt.textContent = 'この結果をWaniKaniに送信しますか？';
+            this.elements.correctAnswer.textContent =
+                `📝 送信しますか？（意味の誤答: ${meaningErrors}、読みの誤答: ${readingErrors}）`;
+            this.elements.confirmIncorrect.textContent = 'はい（間違いのまま提出）';
+            this.elements.confirmCorrect.textContent = '正解として提出';
+            this.elements.confirmSkip.textContent = 'いいえ（提出しない）';
+        } else {
+            this.elements.confirmationPrompt.textContent = 'Submit this review to WaniKani?';
+            this.elements.correctAnswer.textContent =
+                `📝 Submit review? (${meaningErrors} meaning error${meaningErrors !== 1 ? 's' : ''}, ${readingErrors} reading error${readingErrors !== 1 ? 's' : ''})`;
+            this.elements.confirmIncorrect.textContent = 'Yes (submit with errors)';
+            this.elements.confirmCorrect.textContent = 'Submit as Correct';
+            this.elements.confirmSkip.textContent = 'No (skip, don\'t submit)';
+        }
+    }
+
+    shuffleInPlace(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
+        return array;
+    }
+
+    interleavePracticeItems(reviewItems, practiceItems) {
+        if (practiceItems.length === 0) {
+            return reviewItems;
+        }
+
+        const interleaved = [...reviewItems];
+        const spacing = Math.max(1, Math.floor(interleaved.length / practiceItems.length));
+
+        practiceItems.forEach((item, index) => {
+            const insertAt = Math.min(interleaved.length, (index + 1) * spacing + index);
+            interleaved.splice(insertAt, 0, item);
+        });
+
+        return interleaved;
+    }
+
+    /**
+     * Speech recognition often outputs Arabic digits instead of mora (e.g. "2" for に).
+     * Expand digits to romaji so romajiToHiragana can recover the intended kana.
+     */
+    normalizeDigitsToRomajiForReading(text) {
+        if (!text) return text;
+        let s = text.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 0x30));
+        const digitRomaji = {
+            '0': 'zero',
+            '1': 'ichi',
+            '2': 'ni',
+            '3': 'san',
+            '4': 'yon',
+            '5': 'go',
+            '6': 'roku',
+            '7': 'nana',
+            '8': 'hachi',
+            '9': 'kyuu'
+        };
+        return s.replace(/\d/g, (d) => digitRomaji[d] || d);
     }
 
     initializeSpeechRecognition() {
@@ -135,9 +293,11 @@ class WanikaniAuralReviews {
                 // For Japanese reading questions, convert kanji to hiragana for display
                 if (this.currentQuestionType === 'reading') {
                     try {
-                        const convertedTranscript = await this.convertToHiragana(transcript);
+                        const transcriptForKana = this.normalizeDigitsToRomajiForReading(transcript);
+                        const convertedTranscript = await this.convertToHiragana(transcriptForKana);
                         console.log('Converted transcript:', convertedTranscript);
-                        this.elements.userAnswer.textContent = `${transcript} → ${convertedTranscript}`;
+                        const labelIn = transcriptForKana !== transcript ? `${transcript} → ${transcriptForKana}` : transcript;
+                        this.elements.userAnswer.textContent = `${labelIn} → ${convertedTranscript}`;
                     } catch (error) {
                         console.warn('Failed to convert transcript:', error);
                 this.elements.userAnswer.textContent = transcript;
@@ -244,12 +404,7 @@ class WanikaniAuralReviews {
                         }
                     }, 1000);
                 } else {
-                    // Reset button text
-                    if (this.currentQuestionType === 'reading') {
-                        this.elements.startListening.textContent = '🎤 Start Speaking (Japanese)';
-                    } else {
-                        this.elements.startListening.textContent = '🎤 Start Speaking (English)';
-                    }
+                    this.elements.startListening.textContent = this.getMicButtonLabel();
                 }
             };
         } else {
@@ -290,6 +445,19 @@ class WanikaniAuralReviews {
         if (this.elements.confirmSkip) {
             this.elements.confirmSkip.addEventListener('click', () => this.confirmAnswer('skip'));
         }
+
+        if (this.elements.reviewOrder) {
+            this.elements.reviewOrder.addEventListener('change', (e) => this.persistReviewOrder(e.target.value));
+        }
+        if (this.elements.uiLanguage) {
+            this.elements.uiLanguage.addEventListener('change', (e) => this.persistUiLanguage(e.target.value));
+        }
+        if (this.elements.reviewOrderInline) {
+            this.elements.reviewOrderInline.addEventListener('change', (e) => this.persistReviewOrder(e.target.value));
+        }
+        if (this.elements.uiLanguageInline) {
+            this.elements.uiLanguageInline.addEventListener('change', (e) => this.persistUiLanguage(e.target.value));
+        }
     }
 
     async initializeKuroshiro() {
@@ -324,7 +492,14 @@ class WanikaniAuralReviews {
         
         this.apiToken = token;
         localStorage.setItem('wanikani_api_token', token);
-        
+
+        if (this.elements.reviewOrder) {
+            this.persistReviewOrder(this.elements.reviewOrder.value);
+        }
+        if (this.elements.uiLanguage) {
+            this.persistUiLanguage(this.elements.uiLanguage.value);
+        }
+
         await this.loadWanikaniData();
         await this.startReviews();
     }
@@ -447,6 +622,7 @@ class WanikaniAuralReviews {
         this.elements.reviewInterface.style.display = 'none';
         this.elements.loading.style.display = 'none';
         this.elements.error.style.display = 'none';
+        this.syncSettingsFormsFromStorage();
     }
 
     showLoading() {
@@ -511,10 +687,48 @@ class WanikaniAuralReviews {
 
         // Limit to first 100 reviews to reduce loading overhead
         this.totalAvailableReviews = allReviews.length;
-        this.currentReviews = allReviews.slice(0, 100);
+        let reviewItems = allReviews.slice(0, 100);
+        if (this.reviewOrder !== 'sequential') {
+            this.shuffleInPlace(reviewItems);
+        }
+        const burnedPracticeItems = await this.fetchBurnedPracticeReviews(this.burnedPracticeCount);
+        this.currentReviews = this.interleavePracticeItems(reviewItems, burnedPracticeItems);
         this.currentReviewIndex = 0;
 
-        console.log(`Loaded ${this.currentReviews.length} of ${this.totalAvailableReviews} available reviews`);
+        console.log(
+            `Loaded ${reviewItems.length} of ${this.totalAvailableReviews} available reviews ` +
+            `with ${burnedPracticeItems.length} burned practice items (${this.reviewOrder})`
+        );
+    }
+
+    async fetchBurnedPracticeReviews(count) {
+        if (count <= 0) return [];
+
+        try {
+            const response = await fetch('https://api.wanikani.com/v2/assignments?srs_stages=9', {
+                headers: {
+                    'Authorization': `Bearer ${this.apiToken}`,
+                    'Wanikani-Revision': '20170710'
+                }
+            });
+
+            if (!response.ok) {
+                console.warn(`Failed to fetch burned practice items: ${response.status}`);
+                return [];
+            }
+
+            const data = await response.json();
+            const burnedAssignments = data.data || [];
+            this.shuffleInPlace(burnedAssignments);
+
+            return burnedAssignments.slice(0, count).map((assignment) => ({
+                ...assignment,
+                practiceOnly: true
+            }));
+        } catch (error) {
+            console.warn('Error fetching burned practice items:', error);
+            return [];
+        }
     }
 
     async fetchSubject(subjectId) {
@@ -547,6 +761,7 @@ class WanikaniAuralReviews {
         if (!this.currentReviewState || this.currentReviewState.assignmentId !== review.id) {
             this.currentReviewState = {
                 assignmentId: review.id,
+                practiceOnly: Boolean(review.practiceOnly),
                 subjectType: null, // Will be set when subject loads
                 meaningAnswered: false,
                 readingAnswered: false,
@@ -580,7 +795,10 @@ class WanikaniAuralReviews {
 
             // Set item type text and color class
             console.log('Subject type:', subjectType);
-            this.elements.itemType.textContent = subjectType || 'Unknown';
+            const typeLabel = subjectType || 'Unknown';
+            this.elements.itemType.textContent = this.currentReviewState?.practiceOnly
+                ? `${typeLabel} (burned practice)`
+                : typeLabel;
             this.elements.itemType.className = 'item-type ' + (subjectType || '');
             this.elements.itemCharacter.className = 'item-character ' + (subjectType || '');
             console.log('Item character class:', this.elements.itemCharacter.className);
@@ -617,15 +835,25 @@ class WanikaniAuralReviews {
             return;
         }
 
-        // Get subject type for speech (shorten "vocabulary" to "vocab")
+        // Get subject type for speech (shorten "vocabulary" to "vocab" for English TTS)
         let subjectType = this.currentReviewState?.subjectType || '';
+        const subjectTypeForJa = subjectType;
         if (subjectType === 'vocabulary') {
             subjectType = 'vocab';
         }
 
-        // Speak "[subject type] meaning" or "[subject type] reading"
-        const questionWord = questionType === 'meaning' ? 'meaning' : 'reading';
-        const text = subjectType ? `${subjectType} ${questionWord}` : questionWord;
+        let text;
+        let lang = 'en-US';
+        if (this.isJapaneseUi()) {
+            const typeMap = { radical: '部首', kanji: '漢字', vocabulary: '単語' };
+            const subjectJa = typeMap[subjectTypeForJa] || '';
+            const qJa = questionType === 'meaning' ? '意味' : '読み';
+            text = subjectJa ? `${subjectJa}の${qJa}` : qJa;
+            lang = 'ja-JP';
+        } else {
+            const questionWord = questionType === 'meaning' ? 'meaning' : 'reading';
+            text = subjectType ? `${subjectType} ${questionWord}` : questionWord;
+        }
         console.log('Speaking question type:', text);
 
         // Speak the question type, then start listening when complete
@@ -637,7 +865,7 @@ class WanikaniAuralReviews {
                     this.startListening();
                 }
             }, 300);
-        });
+        }, lang);
     }
 
     determineQuestionType() {
@@ -666,6 +894,16 @@ class WanikaniAuralReviews {
     }
 
     getQuestionText(questionType) {
+        if (this.isJapaneseUi()) {
+            switch (questionType) {
+                case 'meaning':
+                    return 'この項目の意味はなんですか。';
+                case 'reading':
+                    return 'この項目の読みはなんですか。';
+                default:
+                    return '答えはなんですか。';
+            }
+        }
         switch (questionType) {
             case 'meaning':
                 return 'What is the meaning of this item?';
@@ -751,14 +989,12 @@ class WanikaniAuralReviews {
         const button = this.elements.continuousMode;
 
         if (this.continuousMode) {
-            button.textContent = '🔄 Continuous Mode: ON';
             button.className = 'btn btn-secondary active';
             // Start continuous listening if not already listening
             if (!this.isListening) {
                 this.startListening();
             }
         } else {
-            button.textContent = '🔄 Continuous Mode: OFF';
             button.className = 'btn btn-secondary';
             // Clear auto-advance timeout when turning off continuous mode
             if (this.autoAdvanceTimeout) {
@@ -770,6 +1006,7 @@ class WanikaniAuralReviews {
                 this.stopListening();
             }
         }
+        this.applyUiLanguageToLiveControls();
     }
 
     startListening() {
@@ -812,12 +1049,11 @@ class WanikaniAuralReviews {
         if (this.currentQuestionType === 'reading') {
             this.recognition.lang = 'ja-JP'; // Japanese for readings
             console.log('Set speech recognition to Japanese for reading question');
-            this.elements.startListening.textContent = '🎤 Start Speaking (Japanese)';
         } else {
             this.recognition.lang = 'en-US'; // English for meanings
             console.log('Set speech recognition to English for meaning question');
-            this.elements.startListening.textContent = '🎤 Start Speaking (English)';
         }
+        this.elements.startListening.textContent = this.getMicButtonLabel();
 
         console.log('Starting speech recognition...');
         this.elements.userAnswer.textContent = 'Listening...';
@@ -857,12 +1093,7 @@ class WanikaniAuralReviews {
         // Don't reset continuousMode here - it should only be toggled by the user
         this.elements.listeningIndicator.style.display = 'none';
         
-        // Reset button text based on question type
-        if (this.currentQuestionType === 'reading') {
-            this.elements.startListening.textContent = '🎤 Start Speaking (Japanese)';
-        } else {
-            this.elements.startListening.textContent = '🎤 Start Speaking (English)';
-        }
+        this.elements.startListening.textContent = this.getMicButtonLabel();
         
         // Clear the timeout
         if (this.listeningTimeout) {
@@ -980,22 +1211,21 @@ class WanikaniAuralReviews {
         this.awaitingSubmitConfirmation = true;
         this.answerLocked = true;
 
-        const state = this.currentReviewState;
-        const meaningErrors = state.incorrectMeaningCount;
-        const readingErrors = state.incorrectReadingCount;
-
-        // Add confirmation prompt below the existing result (don't replace it)
-        this.elements.correctAnswer.textContent = `📝 Submit review? (${meaningErrors} meaning error${meaningErrors !== 1 ? 's' : ''}, ${readingErrors} reading error${readingErrors !== 1 ? 's' : ''})`;
+        this.refreshSubmitConfirmationLabels();
         this.elements.confirmationButtons.style.display = 'block';
         this.elements.nextQuestion.style.display = 'none';
 
         // Only speak and listen in continuous mode
         if (this.continuousMode) {
             console.log('Showing submit confirmation, speaking prompt...');
-            this.speak('Submit incorrect?', () => {
+            const prompt = this.isJapaneseUi()
+                ? '間違いのまま提出しますか。'
+                : 'Submit incorrect?';
+            const lang = this.isJapaneseUi() ? 'ja-JP' : 'en-US';
+            this.speak(prompt, () => {
                 console.log('Confirmation prompt speech complete, starting listening');
                 setTimeout(() => this.startConfirmationListening(), 300);
-            });
+            }, lang);
         }
     }
 
@@ -1012,10 +1242,11 @@ class WanikaniAuralReviews {
             return;
         }
 
-        // Set to English for voice commands
-        this.recognition.lang = 'en-US';
+        this.recognition.lang = this.isJapaneseUi() ? 'ja-JP' : 'en-US';
         console.log('Listening for confirmation command...');
-        this.elements.userAnswer.textContent = 'Listening for: "yes", "no", or "submit correct"...';
+        this.elements.userAnswer.textContent = this.isJapaneseUi()
+            ? '「はい」「いいえ」「正解として提出」のいずれかで答えてください。'
+            : 'Listening for: "yes", "no", or "submit correct"...';
 
         // Small delay before starting to avoid conflicts
         setTimeout(() => {
@@ -1070,7 +1301,8 @@ class WanikaniAuralReviews {
     }
 
     romajiToHiragana(text) {
-        const romaji = text.toLowerCase();
+        const prepared = this.normalizeDigitsToRomajiForReading(text);
+        const romaji = prepared.toLowerCase();
 
         // Mapping from romaji to hiragana (ordered by length, longest first)
         const mappings = [
@@ -1132,12 +1364,15 @@ class WanikaniAuralReviews {
         result = result.replace(/n(?![aiueoy]|$)/g, 'ん');
         result = result.replace(/n$/g, 'ん');
 
-        console.log(`Romaji to hiragana: "${text}" -> "${result}"`);
+        console.log(`Romaji to hiragana: "${prepared}" -> "${result}"`);
         return result;
     }
 
     async checkAnswer(userAnswer, correctAnswers) {
-        const normalizedUserAnswer = userAnswer.toLowerCase().trim();
+        const trimmed = userAnswer.trim();
+        const isReading = this.currentQuestionType === 'reading';
+        const answerForCompare = isReading ? this.normalizeDigitsToRomajiForReading(trimmed) : trimmed;
+        const normalizedUserAnswer = answerForCompare.toLowerCase().trim();
 
         // Check direct matches first
         for (const correctAnswer of correctAnswers) {
@@ -1149,20 +1384,20 @@ class WanikaniAuralReviews {
             }
 
             // For Japanese readings, handle katakana and kanji to hiragana conversion
-            if (this.currentQuestionType === 'reading') {
+            if (isReading) {
                 // Check direct match (preserve hiragana/katakana)
-                if (userAnswer === correctAnswer) {
+                if (answerForCompare === correctAnswer) {
                     return true;
                 }
 
                 // Convert katakana to hiragana
-                const userAsHiragana = this.katakanaToHiragana(userAnswer);
+                const userAsHiragana = this.katakanaToHiragana(answerForCompare);
                 if (userAsHiragana === correctAnswer) {
                     return true;
                 }
 
                 // Convert user's kanji answer to hiragana for comparison
-                const userHiragana = await this.convertToHiragana(userAnswer);
+                const userHiragana = await this.convertToHiragana(answerForCompare);
                 if (userHiragana === correctAnswer) {
                     return true;
                 }
@@ -1173,8 +1408,8 @@ class WanikaniAuralReviews {
                     return true;
                 }
 
-                // Try converting romaji to hiragana
-                const userFromRomaji = this.romajiToHiragana(userAnswer);
+                // Try converting romaji to hiragana (answerForCompare expands misheard digits, e.g. "2" → "ni")
+                const userFromRomaji = this.romajiToHiragana(answerForCompare);
                 if (userFromRomaji === correctAnswer) {
                     return true;
                 }
@@ -1323,12 +1558,14 @@ class WanikaniAuralReviews {
         console.log('Review complete?', this.isReviewComplete());
 
         if (isCorrect) {
-            this.elements.resultMessage.textContent = '✅ Correct!';
+            this.elements.resultMessage.textContent = this.isJapaneseUi() ? '✅ 正解！' : '✅ Correct!';
             this.elements.resultMessage.className = 'result-message correct';
 
             // Speak "Correct" followed by the answer (only in continuous mode)
             if (this.continuousMode) {
-                if (this.currentQuestionType === 'reading') {
+                if (this.isJapaneseUi()) {
+                    this.speak(`正解。${correctAnswerText}`, () => this.handlePostAnswer(), 'ja-JP');
+                } else if (this.currentQuestionType === 'reading') {
                     this.speak(`正解。${correctAnswerText}`, () => this.handlePostAnswer(), 'ja-JP');
                 } else {
                     this.speak(`Correct. ${correctAnswerText}`, () => this.handlePostAnswer());
@@ -1337,13 +1574,20 @@ class WanikaniAuralReviews {
                 this.handlePostAnswer();
             }
         } else {
-            this.elements.resultMessage.textContent = `❌ Incorrect: the answer is ${correctAnswerText}`;
+            this.elements.resultMessage.textContent = this.isJapaneseUi()
+                ? `❌ ちがいます。正解は ${correctAnswerText} です。`
+                : `❌ Incorrect: the answer is ${correctAnswerText}`;
             this.elements.resultMessage.className = 'result-message incorrect';
             this.elements.correctAnswer.textContent = '';
 
             // Speak the feedback with the correct answer (only in continuous mode)
             if (this.continuousMode) {
-                if (this.currentQuestionType === 'reading') {
+                if (this.isJapaneseUi()) {
+                    const wrongSpeech = this.currentQuestionType === 'reading'
+                        ? `ちがいます。正解は${correctAnswerText}です。`
+                        : `ちがいます。正解は${correctAnswers.join('、または、')}です。`;
+                    this.speak(wrongSpeech, () => this.handlePostAnswer(), 'ja-JP');
+                } else if (this.currentQuestionType === 'reading') {
                     this.speak(`ちがいます。正解は${correctAnswerText}です。`, () => this.handlePostAnswer(), 'ja-JP');
                 } else {
                     this.speak(`Incorrect. The correct answer is ${correctAnswers.join(' or ')}`, () => this.handlePostAnswer());
@@ -1361,6 +1605,14 @@ class WanikaniAuralReviews {
         // Check if review is complete and needs confirmation
         if (this.isReviewComplete()) {
             const state = this.currentReviewState;
+            if (state?.practiceOnly) {
+                console.log('Burned practice item complete, skipping WaniKani submission');
+                this.currentReviewIndex++;
+                this.currentReviewState = null;
+                this.displayCurrentReview();
+                return;
+            }
+
             const hasIncorrectAnswers = state && (state.incorrectMeaningCount > 0 || state.incorrectReadingCount > 0);
 
             if (hasIncorrectAnswers) {
@@ -1391,30 +1643,54 @@ class WanikaniAuralReviews {
     handleConfirmationVoiceCommand(transcript) {
         console.log('Processing confirmation voice command:', transcript);
 
-        // Normalize the transcript
-        const command = transcript.toLowerCase().trim();
+        const raw = transcript.trim();
+        const command = raw.toLowerCase();
 
-        // Check for "yes" command
-        if (command === 'yes' || command.includes('yes')) {
-            this.confirmAnswer('incorrect');
+        if (this.isJapaneseUi()) {
+            const submitCorrectHints = [
+                '正解として提出',
+                '正解としてていしゅつ',
+                '正解で提出',
+                '正解として送る',
+                'すべて正解',
+                '全部正解'
+            ];
+            for (const phrase of submitCorrectHints) {
+                if (raw.includes(phrase)) {
+                    this.confirmAnswer('correct');
+                    return;
+                }
+            }
+            if (raw.includes('いいえ')) {
+                this.confirmAnswer('skip');
+                return;
+            }
+            if (raw === 'はい' || raw.startsWith('はい')) {
+                this.confirmAnswer('incorrect');
+                return;
+            }
+            console.log('Unrecognized confirmation command:', command);
+            this.elements.userAnswer.textContent =
+                `「${transcript}」—「はい」「いいえ」「正解として提出」のいずれかで答えてください。`;
             return;
         }
 
-        // Check for "no" command
-        if (command === 'no' || command.includes('no')) {
+        if (command.includes('submit correct') || command.includes('submit as correct')) {
+            this.confirmAnswer('correct');
+            return;
+        }
+        if (command === 'yes' || /^yes\b/.test(command)) {
+            this.confirmAnswer('incorrect');
+            return;
+        }
+        if (command === 'no' || /^no\b/.test(command)) {
             this.confirmAnswer('skip');
             return;
         }
 
-        // Check for "submit correct" command
-        if (command.includes('submit correct') || command.includes('correct')) {
-            this.confirmAnswer('correct');
-            return;
-        }
-
-        // Unrecognized command, prompt again
         console.log('Unrecognized confirmation command:', command);
-        this.elements.userAnswer.textContent = `"${transcript}" - Say "yes", "no", or "submit correct"`;
+        this.elements.userAnswer.textContent =
+            `"${transcript}" — Say "yes", "no", or "submit correct".`;
 
         // The onend handler will automatically restart listening
     }
@@ -1468,6 +1744,11 @@ class WanikaniAuralReviews {
     async submitReview() {
         if (!this.currentReviewState) {
             console.error('No review state to submit');
+            return;
+        }
+
+        if (this.currentReviewState.practiceOnly) {
+            console.log('Skipping WaniKani submission for burned practice item');
             return;
         }
 
@@ -1533,14 +1814,16 @@ class WanikaniAuralReviews {
 
     togglePause() {
         this.isPaused = !this.isPaused;
-        this.elements.pauseReviews.textContent = this.isPaused ? 'Resume Reviews' : 'Pause Reviews';
+        this.applyUiLanguageToLiveControls();
 
         if (this.isPaused) {
             // Stop listening when paused
             this.stopListening();
-            this.speak('Reviews paused');
+            const msg = this.isJapaneseUi() ? '一時停止しました' : 'Reviews paused';
+            this.speak(msg, null, this.isJapaneseUi() ? 'ja-JP' : 'en-US');
         } else {
-            this.speak('Reviews resumed');
+            const msg = this.isJapaneseUi() ? '再開しました' : 'Reviews resumed';
+            this.speak(msg, null, this.isJapaneseUi() ? 'ja-JP' : 'en-US');
             // Restart listening if in continuous mode
             if (this.continuousMode && !this.isListening) {
                 setTimeout(() => {
@@ -1584,9 +1867,12 @@ class WanikaniAuralReviews {
         if (this.currentReviewState) {
             const isRadical = this.currentReviewState.subjectType === 'radical';
             if (!this.currentReviewState.meaningAnswered) {
-                questionPart = isRadical ? '' : ' (meaning)';
+                questionPart = isRadical ? '' : (this.isJapaneseUi() ? '（意味）' : ' (meaning)');
             } else if (!this.currentReviewState.readingAnswered && !isRadical) {
-                questionPart = ' (reading)';
+                questionPart = this.isJapaneseUi() ? '（読み）' : ' (reading)';
+            }
+            if (this.currentReviewState.practiceOnly) {
+                questionPart += this.isJapaneseUi() ? '（燃焼済み練習）' : ' (burned practice)';
             }
         }
 
