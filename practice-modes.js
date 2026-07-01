@@ -13,7 +13,7 @@ export const PRACTICE_MODES = {
         source: 'burnedAssignments',
         submitToWanikani: false,
         itemLimit: 50,
-        poolLimit: 300,
+        poolLimit: Infinity,
         subjectTypes: ['kanji', 'vocabulary'],
         questionTypes: ['meaning', 'reading']
     },
@@ -162,12 +162,17 @@ async function loadBurnedAssignments(apiClient, mode, burnedPracticeStore) {
 
     const eligibleAssignments = assignments
         .filter((assignment) => assignment.data?.subject_type !== 'radical');
-    const selectedAssignments = burnedPracticeStore
-        ? burnedPracticeStore.selectAssignments(eligibleAssignments, mode.itemLimit)
-        : shuffleInPlace(eligibleAssignments).slice(0, mode.itemLimit);
+    const selectedEntries = burnedPracticeStore
+        ? burnedPracticeStore.selectAssignmentEntries(eligibleAssignments, mode.itemLimit)
+        : shuffleInPlace(eligibleAssignments)
+            .slice(0, mode.itemLimit)
+            .map((assignment) => ({ assignment, phase: 'fullPass' }));
 
-    return selectedAssignments
-        .map((assignment) => toSessionItem(assignment, mode, { submitToWanikani: false }));
+    return selectedEntries
+        .map(({ assignment, phase }) => toSessionItem(assignment, mode, {
+            submitToWanikani: false,
+            burnedPracticePhase: phase
+        }));
 }
 
 async function loadGroupedBurnedAssignments(apiClient, subjectStore, mode, burnedPracticeStore, groupBuilder) {
@@ -182,9 +187,15 @@ async function loadGroupedBurnedAssignments(apiClient, subjectStore, mode, burne
     });
     const eligibleAssignments = assignments
         .filter((assignment) => assignment.data?.subject_type !== 'radical');
-    const selectedAssignments = burnedPracticeStore
-        ? burnedPracticeStore.selectAssignments(eligibleAssignments, mode.poolLimit || mode.itemLimit)
-        : shuffleInPlace(eligibleAssignments).slice(0, mode.poolLimit || mode.itemLimit);
+    const selectedEntries = burnedPracticeStore
+        ? burnedPracticeStore.selectAssignmentEntries(eligibleAssignments, mode.poolLimit || mode.itemLimit)
+        : shuffleInPlace(eligibleAssignments)
+            .slice(0, mode.poolLimit || mode.itemLimit)
+            .map((assignment) => ({ assignment, phase: 'fullPass' }));
+    const selectedAssignments = selectedEntries.map(({ assignment }) => assignment);
+    const phaseBySubjectId = new Map(
+        selectedEntries.map(({ assignment, phase }) => [assignment.data.subject_id, phase])
+    );
     const subjects = await subjectStore.getSubjects(selectedAssignments.map((assignment) => assignment.data.subject_id));
     const assignmentBySubjectId = new Map(
         selectedAssignments.map((assignment) => [assignment.data.subject_id, assignment])
@@ -192,7 +203,11 @@ async function loadGroupedBurnedAssignments(apiClient, subjectStore, mode, burne
     const subjectById = new Map(subjects.map((subject) => [subject.id, subject]));
     const groups = groupBuilder(subjects, subjectById, assignmentBySubjectId);
 
-    return flattenGroups(groups, mode, assignmentBySubjectId);
+    return flattenGroups(groups, mode, assignmentBySubjectId)
+        .map((item) => ({
+            ...item,
+            burnedPracticePhase: phaseBySubjectId.get(item.subjectId) || 'fullPass'
+        }));
 }
 
 function buildVisuallySimilarGroups(subjects, subjectById, assignmentBySubjectId) {
@@ -259,18 +274,21 @@ function buildSimilarMeaningGroups(subjects) {
 export async function buildPracticeSession({ apiClient, subjectStore = null, mode, reviewOrder = 'random', burnedPracticeStore = null }) {
     let items = [];
     let totalAvailableItems = 0;
+    let burnedPracticeProgress = null;
 
     if (mode.source === 'dueAssignments') {
         items = await loadDueAssignments(apiClient, mode, reviewOrder);
         totalAvailableItems = items.length;
     } else if (mode.source === 'burnedAssignments') {
         items = await loadBurnedAssignments(apiClient, mode, burnedPracticeStore);
-        totalAvailableItems = items.length;
+        burnedPracticeProgress = burnedPracticeStore?.getProgressSnapshot() || null;
+        totalAvailableItems = burnedPracticeProgress?.fullPassTotal || items.length;
     } else if (mode.source === 'dueAssignmentsWithBurnedPractice') {
         const dueItems = await loadDueAssignments(apiClient, mode, reviewOrder);
         const burnedMode = {
             ...PRACTICE_MODES.burnedPractice,
-            itemLimit: mode.burnedPracticeCount || 0
+            itemLimit: mode.burnedPracticeCount || 0,
+            poolLimit: mode.burnedPracticePoolLimit || 300
         };
         const burnedItems = await loadBurnedAssignments(apiClient, burnedMode, burnedPracticeStore);
         items = interleavePracticeItems(dueItems, burnedItems);
@@ -301,6 +319,7 @@ export async function buildPracticeSession({ apiClient, subjectStore = null, mod
         mode,
         items,
         totalAvailableItems,
+        burnedPracticeProgress,
         index: 0,
         stats: {
             completed: 0,

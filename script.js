@@ -80,6 +80,7 @@ class WanikaniAuralReviews {
             saveToken: document.getElementById('saveToken'),
             progressFill: document.getElementById('progressFill'),
             progressText: document.getElementById('progressText'),
+            burnedProgress: document.getElementById('burnedProgress'),
             itemType: document.getElementById('itemType'),
             itemCharacter: document.getElementById('itemCharacter'),
             questionText: document.getElementById('questionText'),
@@ -800,6 +801,7 @@ class WanikaniAuralReviews {
         this.elements.reviewInterface.style.display = 'none';
         this.elements.loading.style.display = 'none';
         this.elements.error.style.display = 'none';
+        this.updateBurnedProgressIndicator();
         this.syncSettingsFormsFromStorage();
         this.refreshApiSetupTokenState();
     }
@@ -809,6 +811,7 @@ class WanikaniAuralReviews {
         this.elements.reviewInterface.style.display = 'none';
         this.elements.loading.style.display = 'flex';
         this.elements.error.style.display = 'none';
+        this.updateBurnedProgressIndicator();
     }
 
     showReviews() {
@@ -816,6 +819,7 @@ class WanikaniAuralReviews {
         this.elements.reviewInterface.style.display = 'flex';
         this.elements.loading.style.display = 'none';
         this.elements.error.style.display = 'none';
+        this.updateBurnedProgressIndicator();
     }
 
     showError(message) {
@@ -824,6 +828,7 @@ class WanikaniAuralReviews {
         this.elements.reviewInterface.style.display = 'none';
         this.elements.loading.style.display = 'none';
         this.elements.error.style.display = 'flex';
+        this.updateBurnedProgressIndicator();
     }
 
     async startReviews() {
@@ -910,6 +915,7 @@ class WanikaniAuralReviews {
                 submitToWanikani: review.submitToWanikani,
                 practiceOnly: !review.submitToWanikani,
                 modeId: review.modeId,
+                burnedPracticePhase: review.burnedPracticePhase,
                 groupId: review.groupId,
                 groupLabel: review.groupLabel,
                 groupPosition: review.groupPosition,
@@ -1913,6 +1919,7 @@ class WanikaniAuralReviews {
                 this.burnedPracticeStore.recordAttempt({
                     subjectId: state.subjectId,
                     modeId: state.modeId,
+                    reviewPhase: state.burnedPracticePhase,
                     isCorrect: !hadIncorrectAnswers || forceCorrect,
                     incorrectMeaningCount: state.incorrectMeaningCount,
                     incorrectReadingCount: state.incorrectReadingCount
@@ -2122,6 +2129,7 @@ class WanikaniAuralReviews {
     updateProgress() {
         const progress = ((this.currentReviewIndex + 1) / this.currentReviews.length) * 100;
         this.elements.progressFill.style.width = `${progress}%`;
+        this.updateBurnedProgressIndicator();
 
         // Show which part of the review we're on
         let questionPart = '';
@@ -2151,6 +2159,36 @@ class WanikaniAuralReviews {
             progressText += ` (${this.totalAvailableReviews} total)`;
         }
         this.elements.progressText.textContent = progressText + questionPart;
+    }
+
+    updateBurnedProgressIndicator() {
+        if (!this.elements.burnedProgress) {
+            return;
+        }
+
+        const isBurnedPractice = this.currentSession?.mode?.id === 'burnedPractice';
+        if (!isBurnedPractice || this.elements.reviewInterface.style.display === 'none') {
+            this.elements.burnedProgress.style.display = 'none';
+            this.elements.burnedProgress.textContent = '';
+            return;
+        }
+
+        const progress = this.burnedPracticeStore.getProgressSnapshot();
+        const currentPhase = this.currentReviewState?.burnedPracticePhase || progress.phase;
+        const phaseLabel = currentPhase === 'retry'
+            ? (this.isJapaneseUi() ? 'フォローアップ' : 'Follow-up reviews')
+            : (this.isJapaneseUi() ? '初回チェック' : 'Initial pass');
+        const fullPassText = this.isJapaneseUi()
+            ? `全体 ${progress.fullPassCompleted} / ${progress.fullPassTotal}`
+            : `Global ${progress.fullPassCompleted} / ${progress.fullPassTotal}`;
+        const retryText = progress.retryReviewsRemaining > 0
+            ? (this.isJapaneseUi()
+                ? `復習 ${progress.retryReviewsRemaining} 回（${progress.retrySubjectCount} 項目）`
+                : `${progress.retryReviewsRemaining} follow-up reps across ${progress.retrySubjectCount} item${progress.retrySubjectCount === 1 ? '' : 's'}`)
+            : (this.isJapaneseUi() ? '復習待ちなし' : 'no follow-ups queued');
+
+        this.elements.burnedProgress.innerHTML = `<span class="phase">${phaseLabel}</span> · ${fullPassText} · ${retryText}`;
+        this.elements.burnedProgress.style.display = 'block';
     }
 
     resetAnswerSection() {
