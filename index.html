@@ -17,8 +17,12 @@
         <div class="api-setup" id="apiSetup">
             <div class="setup-card">
                 <h2>API Setup</h2>
-                <p>Enter your Wanikani API token to get started:</p>
-                <div class="input-group">
+                <p id="apiSetupDescription">Enter your Wanikani API token to get started:</p>
+                <div class="saved-token" id="savedTokenNotice" style="display: none;">
+                    <span>Using saved WaniKani API token.</span>
+                    <button id="editSavedToken" class="btn btn-outline" type="button">Change API Token</button>
+                </div>
+                <div class="input-group" id="apiTokenInputGroup">
                     <input type="password" id="apiToken" placeholder="Your Wanikani API token">
                     <button id="saveToken" class="btn btn-primary">Save & Start</button>
                 </div>
@@ -127,7 +131,20 @@
 
         <div class="error" id="error" style="display: none;">
             <div class="error-message" id="errorMessage"></div>
-            <button id="retryButton" class="btn btn-primary">Retry</button>
+            <div class="setup-options error-options">
+                <label class="setup-label" for="practiceModeError">Practice mode</label>
+                <select id="practiceModeError" class="setup-select">
+                    <option value="dueReviews">Due Reviews</option>
+                    <option value="burnedPractice">Burned Practice</option>
+                    <option value="visuallySimilarKanji">Visually Similar Kanji</option>
+                    <option value="similarMeaningWords">Similar Meaning Words</option>
+                    <option value="dueReviewsWithBurned">Due Reviews + Burned Warmups</option>
+                </select>
+            </div>
+            <div class="error-actions">
+                <button id="startSelectedMode" class="btn btn-primary">Start Selected Mode</button>
+                <button id="retryButton" class="btn btn-secondary">Back to Setup</button>
+            </div>
         </div>
     </div>
 

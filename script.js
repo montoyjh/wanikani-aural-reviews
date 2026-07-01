@@ -73,6 +73,10 @@ class WanikaniAuralReviews {
             loading: document.getElementById('loading'),
             error: document.getElementById('error'),
             apiToken: document.getElementById('apiToken'),
+            apiSetupDescription: document.getElementById('apiSetupDescription'),
+            savedTokenNotice: document.getElementById('savedTokenNotice'),
+            editSavedToken: document.getElementById('editSavedToken'),
+            apiTokenInputGroup: document.getElementById('apiTokenInputGroup'),
             saveToken: document.getElementById('saveToken'),
             progressFill: document.getElementById('progressFill'),
             progressText: document.getElementById('progressText'),
@@ -102,6 +106,8 @@ class WanikaniAuralReviews {
             uiLanguageInline: document.getElementById('uiLanguageInline'),
             practiceMode: document.getElementById('practiceMode'),
             practiceModeInline: document.getElementById('practiceModeInline'),
+            practiceModeError: document.getElementById('practiceModeError'),
+            startSelectedMode: document.getElementById('startSelectedMode'),
             confirmationPrompt: document.getElementById('confirmationPrompt')
         };
     }
@@ -124,6 +130,34 @@ class WanikaniAuralReviews {
         }
         if (this.elements.practiceModeInline) {
             this.elements.practiceModeInline.value = getPracticeMode(this.practiceModeId).id;
+        }
+        if (this.elements.practiceModeError) {
+            this.elements.practiceModeError.value = getPracticeMode(this.practiceModeId).id;
+        }
+    }
+
+    refreshApiSetupTokenState({ editing = false } = {}) {
+        const hasSavedToken = Boolean(this.apiToken);
+        const showEditor = editing || !hasSavedToken;
+
+        if (this.elements.apiSetupDescription) {
+            this.elements.apiSetupDescription.textContent = hasSavedToken && !showEditor
+                ? 'Choose a practice mode and start with your saved WaniKani API token:'
+                : 'Enter your WaniKani API token to get started:';
+        }
+        if (this.elements.savedTokenNotice) {
+            this.elements.savedTokenNotice.style.display = hasSavedToken && !showEditor ? 'flex' : 'none';
+        }
+        if (this.elements.apiTokenInputGroup) {
+            this.elements.apiTokenInputGroup.style.display = 'flex';
+        }
+        if (this.elements.saveToken) {
+            this.elements.saveToken.textContent = hasSavedToken && !showEditor ? 'Start' : 'Save & Start';
+        }
+        if (this.elements.apiToken) {
+            this.elements.apiToken.style.display = showEditor ? 'block' : 'none';
+            this.elements.apiToken.value = '';
+            this.elements.apiToken.placeholder = hasSavedToken ? 'Enter a new WaniKani API token' : 'Your WaniKani API token';
         }
     }
 
@@ -201,21 +235,28 @@ class WanikaniAuralReviews {
         const state = this.currentReviewState;
         const meaningErrors = state.incorrectMeaningCount;
         const readingErrors = state.incorrectReadingCount;
+        const isPractice = !state.submitToWanikani;
 
         if (this.isJapaneseUi()) {
-            this.elements.confirmationPrompt.textContent = 'この結果をWaniKaniに送信しますか？';
-            this.elements.correctAnswer.textContent =
-                `📝 送信しますか？（意味の誤答: ${meaningErrors}、読みの誤答: ${readingErrors}）`;
-            this.elements.confirmIncorrect.textContent = 'はい（間違いのまま提出）';
-            this.elements.confirmCorrect.textContent = '正解として提出';
-            this.elements.confirmSkip.textContent = 'いいえ（提出しない）';
+            this.elements.confirmationPrompt.textContent = isPractice
+                ? 'この練習結果をローカルに記録しますか？'
+                : 'この結果をWaniKaniに送信しますか？';
+            this.elements.correctAnswer.textContent = isPractice
+                ? `📝 記録しますか？（意味の誤答: ${meaningErrors}、読みの誤答: ${readingErrors}）`
+                : `📝 送信しますか？（意味の誤答: ${meaningErrors}、読みの誤答: ${readingErrors}）`;
+            this.elements.confirmIncorrect.textContent = isPractice ? 'はい（間違いとして記録）' : 'はい（間違いのまま提出）';
+            this.elements.confirmCorrect.textContent = isPractice ? '正解として記録' : '正解として提出';
+            this.elements.confirmSkip.textContent = isPractice ? 'いいえ（記録しない）' : 'いいえ（提出しない）';
         } else {
-            this.elements.confirmationPrompt.textContent = 'Submit this review to WaniKani?';
-            this.elements.correctAnswer.textContent =
-                `📝 Submit review? (${meaningErrors} meaning error${meaningErrors !== 1 ? 's' : ''}, ${readingErrors} reading error${readingErrors !== 1 ? 's' : ''})`;
-            this.elements.confirmIncorrect.textContent = 'Yes (submit with errors)';
-            this.elements.confirmCorrect.textContent = 'Submit as Correct';
-            this.elements.confirmSkip.textContent = 'No (skip, don\'t submit)';
+            this.elements.confirmationPrompt.textContent = isPractice
+                ? 'Record this practice result locally?'
+                : 'Submit this review to WaniKani?';
+            this.elements.correctAnswer.textContent = isPractice
+                ? `📝 Record practice result? (${meaningErrors} meaning error${meaningErrors !== 1 ? 's' : ''}, ${readingErrors} reading error${readingErrors !== 1 ? 's' : ''})`
+                : `📝 Submit review? (${meaningErrors} meaning error${meaningErrors !== 1 ? 's' : ''}, ${readingErrors} reading error${readingErrors !== 1 ? 's' : ''})`;
+            this.elements.confirmIncorrect.textContent = isPractice ? 'Yes (record as missed)' : 'Yes (submit with errors)';
+            this.elements.confirmCorrect.textContent = isPractice ? 'Record as Correct' : 'Submit as Correct';
+            this.elements.confirmSkip.textContent = isPractice ? 'No (don\'t record)' : 'No (skip, don\'t submit)';
         }
     }
 
@@ -250,6 +291,9 @@ class WanikaniAuralReviews {
     normalizeDigitsToRomajiForReading(text) {
         if (!text) return text;
         let s = text.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 0x30));
+        if (/[\u3040-\u30ff\u3400-\u9faf]/.test(s)) {
+            return s;
+        }
         const digitRomaji = {
             '0': 'zero',
             '1': 'ichi',
@@ -307,11 +351,76 @@ class WanikaniAuralReviews {
         return this.normalizeFullWidthDigits(text).replace(/\d+/g, (digits) => this.numberToHiragana(digits));
     }
 
+    normalizeNumericKanjiCompoundsForReading(text) {
+        const monthReadings = {
+            1: 'いちがつ',
+            2: 'にがつ',
+            3: 'さんがつ',
+            4: 'しがつ',
+            5: 'ごがつ',
+            6: 'ろくがつ',
+            7: 'しちがつ',
+            8: 'はちがつ',
+            9: 'くがつ',
+            10: 'じゅうがつ',
+            11: 'じゅういちがつ',
+            12: 'じゅうにがつ'
+        };
+        const dayReadings = {
+            1: 'ついたち',
+            2: 'ふつか',
+            3: 'みっか',
+            4: 'よっか',
+            5: 'いつか',
+            6: 'むいか',
+            7: 'なのか',
+            8: 'ようか',
+            9: 'ここのか',
+            10: 'とおか',
+            14: 'じゅうよっか',
+            20: 'はつか',
+            24: 'にじゅうよっか'
+        };
+        const personReadings = {
+            1: 'ひとり',
+            2: 'ふたり',
+            4: 'よにん',
+            7: 'しちにん',
+            9: 'きゅうにん'
+        };
+        const counterReadings = {
+            1: 'ひとつ',
+            2: 'ふたつ',
+            3: 'みっつ',
+            4: 'よっつ',
+            5: 'いつつ',
+            6: 'むっつ',
+            7: 'ななつ',
+            8: 'やっつ',
+            9: 'ここのつ',
+            10: 'とお'
+        };
+
+        return this.normalizeFullWidthDigits(text)
+            .replace(/\b(\d{1,2})月/g, (match, digits) => monthReadings[Number.parseInt(digits, 10)] || match)
+            .replace(/\b(\d{1,2})日/g, (match, digits) => {
+                const value = Number.parseInt(digits, 10);
+                return dayReadings[value] || `${this.numberToHiragana(digits)}にち`;
+            })
+            .replace(/\b(\d+)年/g, (match, digits) => `${this.numberToHiragana(digits)}ねん`)
+            .replace(/\b(\d+)人/g, (match, digits) => {
+                const value = Number.parseInt(digits, 10);
+                return personReadings[value] || `${this.numberToHiragana(digits)}にん`;
+            })
+            .replace(/\b(\d+)つ/g, (match, digits) => counterReadings[Number.parseInt(digits, 10)] || match);
+    }
+
     getReadingAnswerVariants(text) {
         const trimmed = text.trim();
         const variants = [
             trimmed,
             this.normalizeFullWidthDigits(trimmed),
+            this.normalizeNumericKanjiCompoundsForReading(trimmed),
             this.normalizeDigitsToRomajiForReading(trimmed),
             this.normalizeNumbersToHiraganaForReading(trimmed)
         ];
@@ -368,7 +477,7 @@ class WanikaniAuralReviews {
                 // For Japanese reading questions, convert kanji to hiragana for display
                 if (this.currentQuestionType === 'reading') {
                     try {
-                        const transcriptForKana = this.normalizeDigitsToRomajiForReading(transcript);
+                        const transcriptForKana = this.normalizeNumericKanjiCompoundsForReading(transcript);
                         const convertedTranscript = await this.convertToHiragana(transcriptForKana);
                         console.log('Converted transcript:', convertedTranscript);
                         const labelIn = transcriptForKana !== transcript ? `${transcript} → ${transcriptForKana}` : transcript;
@@ -492,6 +601,12 @@ class WanikaniAuralReviews {
         this.elements.apiToken.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.saveApiToken();
         });
+        if (this.elements.editSavedToken) {
+            this.elements.editSavedToken.addEventListener('click', () => {
+                this.refreshApiSetupTokenState({ editing: true });
+                this.elements.apiToken?.focus();
+            });
+        }
 
         this.elements.startListening.addEventListener('click', () => this.toggleListening());
         this.elements.nextQuestion.addEventListener('click', () => this.nextQuestion());
@@ -542,6 +657,17 @@ class WanikaniAuralReviews {
                 await this.startReviews();
             });
         }
+        if (this.elements.practiceModeError) {
+            this.elements.practiceModeError.addEventListener('change', (e) => this.persistPracticeMode(e.target.value));
+        }
+        if (this.elements.startSelectedMode) {
+            this.elements.startSelectedMode.addEventListener('click', async () => {
+                if (this.elements.practiceModeError) {
+                    this.persistPracticeMode(this.elements.practiceModeError.value);
+                }
+                await this.startReviews();
+            });
+        }
     }
 
     async initializeKuroshiro() {
@@ -568,7 +694,8 @@ class WanikaniAuralReviews {
     }
 
     async saveApiToken() {
-        const token = this.elements.apiToken.value.trim();
+        const tokenEditorVisible = this.elements.apiToken?.style.display !== 'none';
+        const token = tokenEditorVisible ? this.elements.apiToken.value.trim() : this.apiToken;
         if (!token) {
             this.showError('Please enter your API token');
             return;
@@ -674,6 +801,7 @@ class WanikaniAuralReviews {
         this.elements.loading.style.display = 'none';
         this.elements.error.style.display = 'none';
         this.syncSettingsFormsFromStorage();
+        this.refreshApiSetupTokenState();
     }
 
     showLoading() {
@@ -1252,9 +1380,10 @@ class WanikaniAuralReviews {
         // Only speak and listen in continuous mode
         if (this.continuousMode) {
             console.log('Showing submit confirmation, speaking prompt...');
+            const isPractice = !this.currentReviewState?.submitToWanikani;
             const prompt = this.isJapaneseUi()
-                ? '間違いのまま提出しますか。'
-                : 'Submit incorrect?';
+                ? (isPractice ? '間違いとして記録しますか。' : '間違いのまま提出しますか。')
+                : (isPractice ? 'Record as missed?' : 'Submit incorrect?');
             const lang = this.isJapaneseUi() ? 'ja-JP' : 'en-US';
             this.speak(prompt, () => {
                 console.log('Confirmation prompt speech complete, starting listening');
@@ -1402,6 +1531,83 @@ class WanikaniAuralReviews {
         return result;
     }
 
+    cleanMeaningAnswer(text) {
+        return text
+            .normalize('NFKC')
+            .toLowerCase()
+            .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, '-')
+            .replace(/[\u2018\u2019\u201A\u201B\u2032\uFF07]/g, "'")
+            .replace(/[\u201C\u201D\u201E\u201F\u2033\uFF02]/g, '"')
+            .replace(/[^\p{L}\p{N}'"-]+/gu, ' ')
+            .trim()
+            .replace(/\s+/g, ' ');
+    }
+
+    optimalStringAlignmentDistance(left, right, maxDistance = Infinity) {
+        if (left === right) return 0;
+        if (!left.length) return right.length;
+        if (!right.length) return left.length;
+
+        const previousPrevious = new Array(right.length + 1).fill(0);
+        let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+
+        for (let i = 1; i <= left.length; i++) {
+            const current = new Array(right.length + 1);
+            current[0] = i;
+            let rowMinimum = current[0];
+
+            for (let j = 1; j <= right.length; j++) {
+                const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+                current[j] = Math.min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + cost
+                );
+
+                if (
+                    i > 1 &&
+                    j > 1 &&
+                    left[i - 1] === right[j - 2] &&
+                    left[i - 2] === right[j - 1]
+                ) {
+                    current[j] = Math.min(current[j], previousPrevious[j - 2] + 1);
+                }
+
+                rowMinimum = Math.min(rowMinimum, current[j]);
+            }
+
+            if (rowMinimum > maxDistance) {
+                return maxDistance + 1;
+            }
+
+            previousPrevious.splice(0, previousPrevious.length, ...previous);
+            previous = current;
+        }
+
+        return previous[right.length];
+    }
+
+    meaningTypoThreshold(reference) {
+        const length = reference.length;
+        if (length <= 3) return 0;
+        if (length <= 5) return 1;
+        if (length <= 7) return 2;
+        return Math.floor(length / 7) + 2;
+    }
+
+    fuzzyMeaningMatches(userAnswer, correctAnswer) {
+        const cleanUserAnswer = this.cleanMeaningAnswer(userAnswer);
+        const cleanCorrectAnswer = this.cleanMeaningAnswer(correctAnswer);
+        const threshold = this.meaningTypoThreshold(cleanCorrectAnswer);
+
+        if (!cleanUserAnswer || !cleanCorrectAnswer) {
+            return false;
+        }
+
+        const distance = this.optimalStringAlignmentDistance(cleanUserAnswer, cleanCorrectAnswer, threshold);
+        return distance <= threshold;
+    }
+
     async checkAnswer(userAnswer, correctAnswers) {
         const trimmed = userAnswer.trim();
         const isReading = this.currentQuestionType === 'reading';
@@ -1462,6 +1668,11 @@ class WanikaniAuralReviews {
                 return normalizedVariant.includes(normalizedCorrect) ||
                     normalizedCorrect.includes(normalizedVariant);
             })) {
+                return true;
+            }
+
+            if (!isReading && this.fuzzyMeaningMatches(trimmed, correctAnswer)) {
+                console.log(`Accepting fuzzy meaning match: "${trimmed}" ≈ "${correctAnswer}"`);
                 return true;
             }
         }
@@ -1678,7 +1889,7 @@ class WanikaniAuralReviews {
         this.displayCurrentReview();
     }
 
-    async completeCurrentItem({ forceCorrect = false, skipSubmission = false } = {}) {
+    async completeCurrentItem({ forceCorrect = false, skipSubmission = false, allowIncorrectSubmission = false } = {}) {
         const state = this.currentReviewState;
         if (!state || !this.isReviewComplete()) {
             return;
@@ -1691,8 +1902,14 @@ class WanikaniAuralReviews {
             state.incorrectReadingCount = 0;
         }
 
-        if (!state.submitToWanikani || skipSubmission) {
-            if (!state.submitToWanikani && !skipSubmission) {
+        if (!state.submitToWanikani) {
+            if (hadIncorrectAnswers && !forceCorrect && !skipSubmission && !allowIncorrectSubmission) {
+                console.log('Practice item has incorrect answers, showing local record confirmation...');
+                this.showSubmitConfirmation();
+                return;
+            }
+
+            if (!skipSubmission) {
                 this.burnedPracticeStore.recordAttempt({
                     subjectId: state.subjectId,
                     modeId: state.modeId,
@@ -1706,15 +1923,29 @@ class WanikaniAuralReviews {
             return;
         }
 
-        if (this.hasIncorrectAnswers() && !forceCorrect) {
+        if (skipSubmission) {
+            console.log('Skipping WaniKani submission, advancing');
+            await this.advanceToNextItem();
+            return;
+        }
+
+        if (this.hasIncorrectAnswers() && !forceCorrect && !allowIncorrectSubmission) {
             console.log('Review has incorrect answers, showing confirmation...');
             this.showSubmitConfirmation();
             return;
         }
 
         console.log('Review complete, submitting to WaniKani...');
-        await this.submitReview();
-        await this.advanceToNextItem();
+        try {
+            await this.submitReview();
+            await this.advanceToNextItem();
+        } catch (error) {
+            console.error('Failed to submit review, staying on current item:', error);
+            this.answerLocked = false;
+            this.elements.resultMessage.textContent = 'Failed to submit to WaniKani. Please try again.';
+            this.elements.resultMessage.className = 'result-message incorrect';
+            this.elements.nextQuestion.style.display = 'block';
+        }
     }
 
     handleConfirmationVoiceCommand(transcript) {
@@ -1785,7 +2016,7 @@ class WanikaniAuralReviews {
 
         switch (choice) {
             case 'incorrect':
-                await this.completeCurrentItem();
+                await this.completeCurrentItem({ allowIncorrectSubmission: true });
                 break;
 
             case 'correct':
@@ -1815,18 +2046,13 @@ class WanikaniAuralReviews {
             return;
         }
 
-        try {
-            const state = this.currentReviewState;
-            await this.apiClient.submitReview(
-                state.assignmentId,
-                state.incorrectMeaningCount,
-                state.incorrectReadingCount
-            );
-            console.log('Review submitted successfully');
-
-        } catch (error) {
-            console.error('Error submitting review:', error);
-        }
+        const state = this.currentReviewState;
+        await this.apiClient.submitReview(
+            state.assignmentId,
+            state.incorrectMeaningCount,
+            state.incorrectReadingCount
+        );
+        console.log('Review submitted successfully');
     }
 
     nextQuestion() {

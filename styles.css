@@ -73,6 +73,7 @@ body {
 .input-group {
     display: flex;
     gap: 10px;
+    justify-content: center;
     margin-bottom: 20px;
 }
 
@@ -88,6 +89,22 @@ body {
 .input-group input:focus {
     outline: none;
     border-color: #667eea;
+}
+
+.saved-token {
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    margin-bottom: 20px;
+    border: 2px solid #e1e5e9;
+    border-radius: 10px;
+    color: #555;
+    background: #f8fafc;
+}
+
+.saved-token .btn {
+    flex-shrink: 0;
 }
 
 .help-text {
@@ -124,6 +141,18 @@ body {
     border: 2px solid #e1e5e9;
     font-size: 0.95rem;
     background: #fff;
+}
+
+.error-options {
+    max-width: 360px;
+    margin: 24px auto 16px;
+}
+
+.error-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
 }
 
 .inline-settings {
