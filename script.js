@@ -265,6 +265,60 @@ class WanikaniAuralReviews {
         return s.replace(/\d/g, (d) => digitRomaji[d] || d);
     }
 
+    normalizeFullWidthDigits(text) {
+        if (!text) return text;
+        return text.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xff10 + 0x30));
+    }
+
+    numberToHiragana(numberText) {
+        const value = Number.parseInt(numberText, 10);
+        if (!Number.isFinite(value) || value < 0 || value > 99) {
+            return numberText;
+        }
+
+        const ones = {
+            0: 'ぜろ',
+            1: 'いち',
+            2: 'に',
+            3: 'さん',
+            4: 'よん',
+            5: 'ご',
+            6: 'ろく',
+            7: 'なな',
+            8: 'はち',
+            9: 'きゅう'
+        };
+
+        if (value < 10) {
+            return ones[value];
+        }
+
+        if (value === 10) {
+            return 'じゅう';
+        }
+
+        const tens = Math.floor(value / 10);
+        const rest = value % 10;
+        const tensText = tens === 1 ? 'じゅう' : `${ones[tens]}じゅう`;
+        return rest === 0 ? tensText : `${tensText}${ones[rest]}`;
+    }
+
+    normalizeNumbersToHiraganaForReading(text) {
+        return this.normalizeFullWidthDigits(text).replace(/\d+/g, (digits) => this.numberToHiragana(digits));
+    }
+
+    getReadingAnswerVariants(text) {
+        const trimmed = text.trim();
+        const variants = [
+            trimmed,
+            this.normalizeFullWidthDigits(trimmed),
+            this.normalizeDigitsToRomajiForReading(trimmed),
+            this.normalizeNumbersToHiraganaForReading(trimmed)
+        ];
+
+        return [...new Set(variants.filter(Boolean))];
+    }
+
     initializeSpeechRecognition() {
         if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1351,53 +1405,63 @@ class WanikaniAuralReviews {
     async checkAnswer(userAnswer, correctAnswers) {
         const trimmed = userAnswer.trim();
         const isReading = this.currentQuestionType === 'reading';
-        const answerForCompare = isReading ? this.normalizeDigitsToRomajiForReading(trimmed) : trimmed;
-        const normalizedUserAnswer = answerForCompare.toLowerCase().trim();
+        const answerVariants = isReading ? this.getReadingAnswerVariants(trimmed) : [trimmed];
+        const normalizedUserAnswer = answerVariants[0].toLowerCase().trim();
+
+        if (isReading && this.currentSubject?.characters && answerVariants.includes(this.currentSubject.characters)) {
+            console.log('Accepting reading because transcript matched current subject characters exactly');
+            return true;
+        }
 
         // Check direct matches first
         for (const correctAnswer of correctAnswers) {
             const normalizedCorrect = correctAnswer.toLowerCase().trim();
 
             // Direct match
-            if (normalizedUserAnswer === normalizedCorrect) {
+            if (answerVariants.some((answerVariant) => answerVariant.toLowerCase().trim() === normalizedCorrect)) {
                 return true;
             }
 
             // For Japanese readings, handle katakana and kanji to hiragana conversion
             if (isReading) {
-                // Check direct match (preserve hiragana/katakana)
-                if (answerForCompare === correctAnswer) {
-                    return true;
-                }
+                for (const answerForCompare of answerVariants) {
+                    // Check direct match (preserve hiragana/katakana)
+                    if (answerForCompare === correctAnswer) {
+                        return true;
+                    }
 
-                // Convert katakana to hiragana
-                const userAsHiragana = this.katakanaToHiragana(answerForCompare);
-                if (userAsHiragana === correctAnswer) {
-                    return true;
-                }
+                    // Convert katakana to hiragana
+                    const userAsHiragana = this.katakanaToHiragana(answerForCompare);
+                    if (userAsHiragana === correctAnswer) {
+                        return true;
+                    }
 
-                // Convert user's kanji answer to hiragana for comparison
-                const userHiragana = await this.convertToHiragana(answerForCompare);
-                if (userHiragana === correctAnswer) {
-                    return true;
-                }
+                    // Convert user's kanji answer to hiragana for comparison
+                    const userHiragana = await this.convertToHiragana(answerForCompare);
+                    if (userHiragana === correctAnswer) {
+                        return true;
+                    }
 
-                // Also try converting the kanji result through katakana to hiragana
-                const userHiraganaFromKatakana = this.katakanaToHiragana(userHiragana);
-                if (userHiraganaFromKatakana === correctAnswer) {
-                    return true;
-                }
+                    // Also try converting the kanji result through katakana to hiragana
+                    const userHiraganaFromKatakana = this.katakanaToHiragana(userHiragana);
+                    if (userHiraganaFromKatakana === correctAnswer) {
+                        return true;
+                    }
 
-                // Try converting romaji to hiragana (answerForCompare expands misheard digits, e.g. "2" → "ni")
-                const userFromRomaji = this.romajiToHiragana(answerForCompare);
-                if (userFromRomaji === correctAnswer) {
-                    return true;
+                    // Try converting romaji to hiragana (variants expand misheard digits, e.g. "2" → "ni")
+                    const userFromRomaji = this.romajiToHiragana(answerForCompare);
+                    if (userFromRomaji === correctAnswer) {
+                        return true;
+                    }
                 }
             }
 
             // Check for partial matches
-            if (normalizedUserAnswer.includes(normalizedCorrect) ||
-                normalizedCorrect.includes(normalizedUserAnswer)) {
+            if (answerVariants.some((answerVariant) => {
+                const normalizedVariant = answerVariant.toLowerCase().trim();
+                return normalizedVariant.includes(normalizedCorrect) ||
+                    normalizedCorrect.includes(normalizedVariant);
+            })) {
                 return true;
             }
         }
