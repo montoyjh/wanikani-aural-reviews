@@ -36,6 +36,14 @@
                         <option value="en" selected>English</option>
                         <option value="ja">Japanese</option>
                     </select>
+                    <label class="setup-label" for="practiceMode">Practice mode</label>
+                    <select id="practiceMode" class="setup-select">
+                        <option value="dueReviews" selected>Due Reviews</option>
+                        <option value="burnedPractice">Burned Practice</option>
+                        <option value="visuallySimilarKanji">Visually Similar Kanji</option>
+                        <option value="similarMeaningWords">Similar Meaning Words</option>
+                        <option value="dueReviewsWithBurned">Due Reviews + Burned Warmups</option>
+                    </select>
                 </div>
             </div>
         </div>
@@ -96,6 +104,14 @@
                     <select id="uiLanguageInline" class="setup-select">
                         <option value="en">EN</option>
                         <option value="ja">JA</option>
+                    </select>
+                    <label for="practiceModeInline">Mode</label>
+                    <select id="practiceModeInline" class="setup-select" title="Reloads the current session">
+                        <option value="dueReviews">Reviews</option>
+                        <option value="burnedPractice">Burned</option>
+                        <option value="visuallySimilarKanji">Similar Kanji</option>
+                        <option value="similarMeaningWords">Similar Words</option>
+                        <option value="dueReviewsWithBurned">Reviews + Burned</option>
                     </select>
                 </div>
                 <button id="pauseReviews" class="btn btn-secondary">Pause Reviews</button>

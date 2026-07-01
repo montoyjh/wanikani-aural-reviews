@@ -6,6 +6,7 @@ A web application that allows you to practice Wanikani reviews using voice input
 
 - 🎧 **Text-to-Speech**: Listen to questions and feedback
 - 🎤 **Speech Recognition**: Answer questions using your voice
+- 🧭 **Practice Modes**: Choose due reviews, burned-item practice, reading practice, or mixed review/practice sessions
 - 📊 **Progress Tracking**: Visual progress bar and session statistics
 - 🔄 **Real-time API Integration**: Submit answers directly to Wanikani
 - 📱 **Responsive Design**: Works on desktop and mobile devices
@@ -37,11 +38,19 @@ A web application that allows you to practice Wanikani reviews using voice input
 ### Starting a Review Session
 
 1. Enter your API token in the setup screen
-2. The app will fetch available reviews from Wanikani
-3. Click "Play Question" to hear the question
+2. Choose your review order, prompt language, and practice mode
+3. The app will fetch the items needed for that mode from Wanikani
 4. Click "Start Speaking" and say your answer
 5. The app will check your answer and provide feedback
 6. Click "Next Question" to continue
+
+### Practice Modes
+
+- **Due Reviews**: WaniKani reviews that are available now. Completed items are submitted to WaniKani.
+- **Burned Practice**: Practice-only session using burned assignments. Results are not submitted.
+- **Visually Similar Kanji**: Burned kanji grouped by WaniKani's visually similar kanji metadata. Group order and item order within each group are randomized.
+- **Similar Meaning Words**: Burned vocabulary grouped by shared accepted meanings. Group order and item order within each group are randomized.
+- **Due Reviews + Burned Warmups**: Due reviews with a small number of burned practice items mixed in.
 
 ### Question Types
 
@@ -70,6 +79,7 @@ The app supports two types of questions:
 
 This app uses the Wanikani API v2 to:
 - Fetch available reviews
+- Fetch practice pools such as burned assignments
 - Get subject data (kanji, radicals, vocabulary)
 - Submit review results
 - Track progress
@@ -78,7 +88,7 @@ This app uses the Wanikani API v2 to:
 
 The Wanikani API has rate limits. The app is designed to be respectful of these limits by:
 - Only fetching data when needed
-- Caching results appropriately
+- Caching subject data by subject ID instead of bulk-downloading all kanji and vocabulary on startup
 - Not making excessive requests
 
 ## Troubleshooting

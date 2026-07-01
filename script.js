@@ -1,11 +1,19 @@
 import Kuroshiro from 'kuroshiro';
 import KuromojiAnalyzer from 'kuroshiro-analyzer-kuromoji';
+import { WanikaniApiClient } from './wanikani-api.js';
+import { SubjectStore } from './subject-store.js';
+import { BurnedPracticeStore } from './burned-practice-store.js';
+import { DEFAULT_PRACTICE_MODE_ID, PRACTICE_MODES, buildPracticeSession, getPracticeMode } from './practice-modes.js';
 
 class WanikaniAuralReviews {
     constructor() {
         this.apiToken = localStorage.getItem('wanikani_api_token');
+        this.apiClient = new WanikaniApiClient(this.apiToken);
+        this.subjectStore = new SubjectStore(this.apiClient);
+        this.burnedPracticeStore = new BurnedPracticeStore();
         this.currentReviews = [];
         this.currentReviewIndex = 0;
+        this.currentSession = null;
         this.recognition = null;
         this.synthesis = window.speechSynthesis;
         this.isListening = false;
@@ -39,7 +47,8 @@ class WanikaniAuralReviews {
 
         this.reviewOrder = localStorage.getItem('wanikani_review_order') || 'random';
         this.uiLanguage = localStorage.getItem('wanikani_ui_language') || 'en';
-        this.burnedPracticeCount = 5;
+        this.practiceModeId = localStorage.getItem('wanikani_practice_mode') || DEFAULT_PRACTICE_MODE_ID;
+        this.burnedPracticeCount = PRACTICE_MODES.dueReviewsWithBurned.burnedPracticeCount;
 
         this.initializeElements();
         this.syncSettingsFormsFromStorage();
@@ -51,9 +60,7 @@ class WanikaniAuralReviews {
         this.initializeKuroshiro();
 
         if (this.apiToken) {
-            this.loadWanikaniData().then(() => {
-                this.startReviews();
-            });
+            this.startReviews();
         } else {
             this.showApiSetup();
         }
@@ -93,6 +100,8 @@ class WanikaniAuralReviews {
             uiLanguage: document.getElementById('uiLanguage'),
             reviewOrderInline: document.getElementById('reviewOrderInline'),
             uiLanguageInline: document.getElementById('uiLanguageInline'),
+            practiceMode: document.getElementById('practiceMode'),
+            practiceModeInline: document.getElementById('practiceModeInline'),
             confirmationPrompt: document.getElementById('confirmationPrompt')
         };
     }
@@ -109,6 +118,12 @@ class WanikaniAuralReviews {
         }
         if (this.elements.uiLanguageInline) {
             this.elements.uiLanguageInline.value = this.uiLanguage === 'ja' ? 'ja' : 'en';
+        }
+        if (this.elements.practiceMode) {
+            this.elements.practiceMode.value = getPracticeMode(this.practiceModeId).id;
+        }
+        if (this.elements.practiceModeInline) {
+            this.elements.practiceModeInline.value = getPracticeMode(this.practiceModeId).id;
         }
     }
 
@@ -129,6 +144,12 @@ class WanikaniAuralReviews {
         if (this.awaitingSubmitConfirmation) {
             this.refreshSubmitConfirmationLabels();
         }
+    }
+
+    persistPracticeMode(value) {
+        this.practiceModeId = getPracticeMode(value).id;
+        localStorage.setItem('wanikani_practice_mode', this.practiceModeId);
+        this.syncSettingsFormsFromStorage();
     }
 
     isJapaneseUi() {
@@ -458,6 +479,15 @@ class WanikaniAuralReviews {
         if (this.elements.uiLanguageInline) {
             this.elements.uiLanguageInline.addEventListener('change', (e) => this.persistUiLanguage(e.target.value));
         }
+        if (this.elements.practiceMode) {
+            this.elements.practiceMode.addEventListener('change', (e) => this.persistPracticeMode(e.target.value));
+        }
+        if (this.elements.practiceModeInline) {
+            this.elements.practiceModeInline.addEventListener('change', async (e) => {
+                this.persistPracticeMode(e.target.value);
+                await this.startReviews();
+            });
+        }
     }
 
     async initializeKuroshiro() {
@@ -491,6 +521,7 @@ class WanikaniAuralReviews {
         }
         
         this.apiToken = token;
+        this.apiClient.setApiToken(token);
         localStorage.setItem('wanikani_api_token', token);
 
         if (this.elements.reviewOrder) {
@@ -499,8 +530,10 @@ class WanikaniAuralReviews {
         if (this.elements.uiLanguage) {
             this.persistUiLanguage(this.elements.uiLanguage.value);
         }
+        if (this.elements.practiceMode) {
+            this.persistPracticeMode(this.elements.practiceMode.value);
+        }
 
-        await this.loadWanikaniData();
         await this.startReviews();
     }
 
@@ -521,46 +554,10 @@ class WanikaniAuralReviews {
     }
 
     async loadWanikaniData() {
-        console.log('Loading Wanikani data...');
-        this.showLoading();
-        
-        try {
-            // Check if we have cached data
-            const cachedData = localStorage.getItem('wanikani_data_cache');
-            const cacheTimestamp = localStorage.getItem('wanikani_data_timestamp');
-            const oneDay = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
-            
-            if (cachedData && cacheTimestamp && (Date.now() - parseInt(cacheTimestamp)) < oneDay) {
-                console.log('Using cached Wanikani data');
-                this.parseCachedData(JSON.parse(cachedData));
-                this.dataLoaded = true;
-                return;
-            }
-            
-            console.log('Downloading fresh Wanikani data...');
-            
-            // Download all kanji data
-            await this.downloadAllSubjects('kanji');
-            
-            // Download all vocabulary data
-            await this.downloadAllSubjects('vocabulary');
-            
-            // Cache the data
-            const dataToCache = {
-                kanji: Array.from(this.kanjiData.entries()),
-                vocabulary: Array.from(this.vocabularyData.entries())
-            };
-            
-            localStorage.setItem('wanikani_data_cache', JSON.stringify(dataToCache));
-            localStorage.setItem('wanikani_data_timestamp', Date.now().toString());
-            
-            this.dataLoaded = true;
-            console.log('Wanikani data loaded successfully');
-            
-        } catch (error) {
-            console.error('Error loading Wanikani data:', error);
-            this.showError('Failed to load Wanikani data. Please check your API token and try again.');
-        }
+        // Legacy compatibility: subject data is now loaded lazily by SubjectStore.
+        this.kanjiData = this.subjectStore.getKanjiData();
+        this.vocabularyData = this.subjectStore.getVocabularyData();
+        this.dataLoaded = true;
     }
 
     parseCachedData(cachedData) {
@@ -648,18 +645,20 @@ class WanikaniAuralReviews {
     }
 
     async startReviews() {
+        if (this.isListening) {
+            this.stopListening();
+        }
+        this.awaitingSubmitConfirmation = false;
+        this.answerLocked = false;
+        this.currentReviewState = null;
+        this.currentSubject = null;
         this.showLoading();
         
         try {
-            // Make sure data is loaded before starting reviews
-            if (!this.dataLoaded) {
-                console.log('Data not loaded yet, waiting...');
-                await this.loadWanikaniData();
-            }
-            
             await this.fetchReviews();
             if (this.currentReviews.length === 0) {
-                this.showError('No reviews available at this time. Check back later!');
+                const mode = getPracticeMode(this.practiceModeId);
+                this.showError(`No items available for ${mode.label}.`);
                 return;
             }
             this.showReviews();
@@ -671,82 +670,46 @@ class WanikaniAuralReviews {
     }
 
     async fetchReviews() {
-        const response = await fetch('https://api.wanikani.com/v2/assignments?immediately_available_for_review=true', {
-            headers: {
-                'Authorization': `Bearer ${this.apiToken}`,
-                'Wanikani-Revision': '20170710'
-            }
+        const mode = getPracticeMode(this.practiceModeId);
+        const session = await buildPracticeSession({
+            apiClient: this.apiClient,
+            subjectStore: this.subjectStore,
+            mode,
+            reviewOrder: this.reviewOrder,
+            burnedPracticeStore: this.burnedPracticeStore
         });
 
-        if (!response.ok) {
-            throw new Error(`API request failed: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const allReviews = data.data || [];
-
-        // Limit to first 100 reviews to reduce loading overhead
-        this.totalAvailableReviews = allReviews.length;
-        let reviewItems = allReviews.slice(0, 100);
-        if (this.reviewOrder !== 'sequential') {
-            this.shuffleInPlace(reviewItems);
-        }
-        const burnedPracticeItems = await this.fetchBurnedPracticeReviews(this.burnedPracticeCount);
-        this.currentReviews = this.interleavePracticeItems(reviewItems, burnedPracticeItems);
+        this.currentSession = session;
+        this.currentReviews = session.items;
         this.currentReviewIndex = 0;
+        this.totalAvailableReviews = session.totalAvailableItems;
+        this.kanjiData = this.subjectStore.getKanjiData();
+        this.vocabularyData = this.subjectStore.getVocabularyData();
+
+        await this.subjectStore.prefetchSubjects(this.currentReviews.slice(0, 10).map((item) => item.subjectId));
 
         console.log(
-            `Loaded ${reviewItems.length} of ${this.totalAvailableReviews} available reviews ` +
-            `with ${burnedPracticeItems.length} burned practice items (${this.reviewOrder})`
+            `Loaded ${this.currentReviews.length} items for ${mode.label} (${this.reviewOrder})`
         );
     }
 
     async fetchBurnedPracticeReviews(count) {
-        if (count <= 0) return [];
+        const session = await buildPracticeSession({
+            apiClient: this.apiClient,
+            subjectStore: this.subjectStore,
+            mode: { ...PRACTICE_MODES.burnedPractice, itemLimit: count },
+            reviewOrder: this.reviewOrder,
+            burnedPracticeStore: this.burnedPracticeStore
+        });
 
-        try {
-            const response = await fetch('https://api.wanikani.com/v2/assignments?srs_stages=9', {
-                headers: {
-                    'Authorization': `Bearer ${this.apiToken}`,
-                    'Wanikani-Revision': '20170710'
-                }
-            });
-
-            if (!response.ok) {
-                console.warn(`Failed to fetch burned practice items: ${response.status}`);
-                return [];
-            }
-
-            const data = await response.json();
-            const burnedAssignments = data.data || [];
-            this.shuffleInPlace(burnedAssignments);
-
-            return burnedAssignments.slice(0, count).map((assignment) => ({
-                ...assignment,
-                practiceOnly: true
-            }));
-        } catch (error) {
-            console.warn('Error fetching burned practice items:', error);
-            return [];
-        }
+        return session.items;
     }
 
     async fetchSubject(subjectId) {
-        const response = await fetch(`https://api.wanikani.com/v2/subjects/${subjectId}`, {
-            headers: {
-                'Authorization': `Bearer ${this.apiToken}`,
-                'Wanikani-Revision': '20170710'
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error(`Failed to fetch subject: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log('Fetched subject data:', data); // Debug log
-        // Merge object type into data for easier access
-        return { ...data.data, object: data.object };
+        const subject = await this.subjectStore.getSubject(subjectId);
+        this.kanjiData = this.subjectStore.getKanjiData();
+        this.vocabularyData = this.subjectStore.getVocabularyData();
+        return subject;
     }
 
     displayCurrentReview() {
@@ -758,10 +721,18 @@ class WanikaniAuralReviews {
         const review = this.currentReviews[this.currentReviewIndex];
 
         // Initialize review state for this assignment if not already set
-        if (!this.currentReviewState || this.currentReviewState.assignmentId !== review.id) {
+        if (!this.currentReviewState || this.currentReviewState.assignmentId !== review.assignmentId) {
             this.currentReviewState = {
-                assignmentId: review.id,
-                practiceOnly: Boolean(review.practiceOnly),
+                assignmentId: review.assignmentId,
+                subjectId: review.subjectId,
+                submitToWanikani: review.submitToWanikani,
+                practiceOnly: !review.submitToWanikani,
+                modeId: review.modeId,
+                groupId: review.groupId,
+                groupLabel: review.groupLabel,
+                groupPosition: review.groupPosition,
+                groupSize: review.groupSize,
+                questionTypes: review.questionTypes || ['meaning', 'reading'],
                 subjectType: null, // Will be set when subject loads
                 meaningAnswered: false,
                 readingAnswered: false,
@@ -770,7 +741,8 @@ class WanikaniAuralReviews {
             };
         }
 
-        this.loadSubjectData(review.data.subject_id);
+        this.currentSubject = null;
+        this.loadSubjectData(review.subjectId);
         this.updateProgress();
         this.resetAnswerSection();
     }
@@ -796,8 +768,12 @@ class WanikaniAuralReviews {
             // Set item type text and color class
             console.log('Subject type:', subjectType);
             const typeLabel = subjectType || 'Unknown';
+            const modeLabel = getPracticeMode(this.currentReviewState?.modeId).label;
+            const groupLabel = this.currentReviewState?.groupSize
+                ? `group ${this.currentReviewState.groupPosition}/${this.currentReviewState.groupSize}`
+                : null;
             this.elements.itemType.textContent = this.currentReviewState?.practiceOnly
-                ? `${typeLabel} (burned practice)`
+                ? `${typeLabel} (${[modeLabel, groupLabel].filter(Boolean).join(' · ')})`
                 : typeLabel;
             this.elements.itemType.className = 'item-type ' + (subjectType || '');
             this.elements.itemCharacter.className = 'item-character ' + (subjectType || '');
@@ -877,14 +853,15 @@ class WanikaniAuralReviews {
 
         // Radicals only have meanings, no readings
         const isRadical = state.subjectType === 'radical';
+        const allowedQuestionTypes = state.questionTypes || ['meaning', 'reading'];
 
         // If meaning not yet answered, ask meaning first
-        if (!state.meaningAnswered) {
+        if (allowedQuestionTypes.includes('meaning') && !state.meaningAnswered) {
             return 'meaning';
         }
 
         // If reading not yet answered and this subject has readings (not a radical)
-        if (!state.readingAnswered && !isRadical) {
+        if (allowedQuestionTypes.includes('reading') && !state.readingAnswered && !isRadical) {
             return 'reading';
         }
 
@@ -1178,14 +1155,17 @@ class WanikaniAuralReviews {
 
         const state = this.currentReviewState;
         const isRadical = state.subjectType === 'radical';
+        const allowedQuestionTypes = state.questionTypes || ['meaning', 'reading'];
 
-        // Radicals only need meaning answered
-        if (isRadical) {
-            return state.meaningAnswered;
+        if (allowedQuestionTypes.includes('meaning') && !state.meaningAnswered) {
+            return false;
         }
 
-        // Kanji and vocabulary need both meaning and reading
-        return state.meaningAnswered && state.readingAnswered;
+        if (allowedQuestionTypes.includes('reading') && !isRadical && !state.readingAnswered) {
+            return false;
+        }
+
+        return true;
     }
 
     async checkAndSubmitReview() {
@@ -1604,32 +1584,8 @@ class WanikaniAuralReviews {
 
         // Check if review is complete and needs confirmation
         if (this.isReviewComplete()) {
-            const state = this.currentReviewState;
-            if (state?.practiceOnly) {
-                console.log('Burned practice item complete, skipping WaniKani submission');
-                this.currentReviewIndex++;
-                this.currentReviewState = null;
-                this.displayCurrentReview();
-                return;
-            }
-
-            const hasIncorrectAnswers = state && (state.incorrectMeaningCount > 0 || state.incorrectReadingCount > 0);
-
-            if (hasIncorrectAnswers) {
-                // Show confirmation before submitting
-                console.log('Review has incorrect answers, showing confirmation...');
-                this.showSubmitConfirmation();
-                return;
-            } else {
-                // All correct, submit immediately
-                console.log('Review complete with all correct, submitting...');
-                await this.submitReview();
-                // Move to next assignment
-                this.currentReviewIndex++;
-                this.currentReviewState = null;
-                this.displayCurrentReview();
-                return;
-            }
+            await this.completeCurrentItem();
+            return;
         }
 
         // Not complete yet, auto-advance in continuous mode
@@ -1638,6 +1594,63 @@ class WanikaniAuralReviews {
             console.log('Auto-advancing to next question');
             this.nextQuestion();
         }
+    }
+
+    hasIncorrectAnswers() {
+        const state = this.currentReviewState;
+        return Boolean(state && (state.incorrectMeaningCount > 0 || state.incorrectReadingCount > 0));
+    }
+
+    async advanceToNextItem() {
+        this.currentReviewIndex++;
+        this.currentReviewState = null;
+        this.answerLocked = false;
+
+        const nextItem = this.currentReviews[this.currentReviewIndex];
+        if (nextItem?.subjectId) {
+            this.subjectStore.prefetchSubjects([nextItem.subjectId]);
+        }
+
+        this.displayCurrentReview();
+    }
+
+    async completeCurrentItem({ forceCorrect = false, skipSubmission = false } = {}) {
+        const state = this.currentReviewState;
+        if (!state || !this.isReviewComplete()) {
+            return;
+        }
+
+        const hadIncorrectAnswers = this.hasIncorrectAnswers();
+
+        if (forceCorrect) {
+            state.incorrectMeaningCount = 0;
+            state.incorrectReadingCount = 0;
+        }
+
+        if (!state.submitToWanikani || skipSubmission) {
+            if (!state.submitToWanikani && !skipSubmission) {
+                this.burnedPracticeStore.recordAttempt({
+                    subjectId: state.subjectId,
+                    modeId: state.modeId,
+                    isCorrect: !hadIncorrectAnswers || forceCorrect,
+                    incorrectMeaningCount: state.incorrectMeaningCount,
+                    incorrectReadingCount: state.incorrectReadingCount
+                });
+            }
+            console.log('Practice item complete or submission skipped, advancing');
+            await this.advanceToNextItem();
+            return;
+        }
+
+        if (this.hasIncorrectAnswers() && !forceCorrect) {
+            console.log('Review has incorrect answers, showing confirmation...');
+            this.showSubmitConfirmation();
+            return;
+        }
+
+        console.log('Review complete, submitting to WaniKani...');
+        await this.submitReview();
+        await this.advanceToNextItem();
     }
 
     handleConfirmationVoiceCommand(transcript) {
@@ -1708,35 +1721,15 @@ class WanikaniAuralReviews {
 
         switch (choice) {
             case 'incorrect':
-                // Submit with incorrect counts as recorded
-                console.log('Submitting review with incorrect answers...');
-                await this.submitReview();
-                // Move to next assignment
-                this.currentReviewIndex++;
-                this.currentReviewState = null;
-                this.displayCurrentReview();
+                await this.completeCurrentItem();
                 break;
 
             case 'correct':
-                // Reset incorrect counts to 0, then submit
-                console.log('Submitting review as all correct...');
-                if (this.currentReviewState) {
-                    this.currentReviewState.incorrectMeaningCount = 0;
-                    this.currentReviewState.incorrectReadingCount = 0;
-                }
-                await this.submitReview();
-                // Move to next assignment
-                this.currentReviewIndex++;
-                this.currentReviewState = null;
-                this.displayCurrentReview();
+                await this.completeCurrentItem({ forceCorrect: true });
                 break;
 
             case 'skip':
-                // Don't submit, just move to next assignment
-                console.log('Skipping submission, moving to next assignment...');
-                this.currentReviewIndex++;
-                this.currentReviewState = null;
-                this.displayCurrentReview();
+                await this.completeCurrentItem({ skipSubmission: true });
                 break;
         }
     }
@@ -1747,8 +1740,8 @@ class WanikaniAuralReviews {
             return;
         }
 
-        if (this.currentReviewState.practiceOnly) {
-            console.log('Skipping WaniKani submission for burned practice item');
+        if (!this.currentReviewState.submitToWanikani) {
+            console.log('Skipping WaniKani submission for practice item');
             return;
         }
 
@@ -1760,34 +1753,12 @@ class WanikaniAuralReviews {
 
         try {
             const state = this.currentReviewState;
-            const endpoint = `https://api.wanikani.com/v2/reviews`;
-
-            const payload = {
-                review: {
-                    assignment_id: state.assignmentId,
-                    incorrect_meaning_answers: state.incorrectMeaningCount,
-                    incorrect_reading_answers: state.incorrectReadingCount
-                }
-            };
-
-            console.log('Submitting review:', payload);
-
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiToken}`,
-                    'Wanikani-Revision': '20170710',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('Failed to submit review:', response.status, errorText);
-            } else {
-                console.log('Review submitted successfully');
-            }
+            await this.apiClient.submitReview(
+                state.assignmentId,
+                state.incorrectMeaningCount,
+                state.incorrectReadingCount
+            );
+            console.log('Review submitted successfully');
 
         } catch (error) {
             console.error('Error submitting review:', error);
@@ -1805,10 +1776,7 @@ class WanikaniAuralReviews {
             this.updateProgress(); // Update to show (reading) indicator
             this.speakQuestionType(questionType); // Speak the question type
         } else {
-            // Move to next assignment
-            this.currentReviewIndex++;
-            this.currentReviewState = null; // Clear state for next assignment
-            this.displayCurrentReview();
+            this.completeCurrentItem();
         }
     }
 
@@ -1837,8 +1805,10 @@ class WanikaniAuralReviews {
 
     endSession() {
         if (confirm('Are you sure you want to end this review session?')) {
-            localStorage.removeItem('wanikani_api_token');
-            this.apiToken = null;
+            this.currentSession = null;
+            this.currentReviews = [];
+            this.currentReviewIndex = 0;
+            this.currentReviewState = null;
             this.showApiSetup();
             this.speak('Review session ended');
         }
@@ -1847,6 +1817,7 @@ class WanikaniAuralReviews {
     clearCache() {
         localStorage.removeItem('wanikani_data_cache');
         localStorage.removeItem('wanikani_data_timestamp');
+        this.subjectStore.clear();
         this.kanjiData.clear();
         this.vocabularyData.clear();
         this.dataLoaded = false;
@@ -1866,13 +1837,21 @@ class WanikaniAuralReviews {
         let questionPart = '';
         if (this.currentReviewState) {
             const isRadical = this.currentReviewState.subjectType === 'radical';
-            if (!this.currentReviewState.meaningAnswered) {
+            const allowedQuestionTypes = this.currentReviewState.questionTypes || ['meaning', 'reading'];
+            if (allowedQuestionTypes.includes('meaning') && !this.currentReviewState.meaningAnswered) {
                 questionPart = isRadical ? '' : (this.isJapaneseUi() ? '（意味）' : ' (meaning)');
-            } else if (!this.currentReviewState.readingAnswered && !isRadical) {
+            } else if (allowedQuestionTypes.includes('reading') && !this.currentReviewState.readingAnswered && !isRadical) {
                 questionPart = this.isJapaneseUi() ? '（読み）' : ' (reading)';
             }
             if (this.currentReviewState.practiceOnly) {
-                questionPart += this.isJapaneseUi() ? '（燃焼済み練習）' : ' (burned practice)';
+                const modeLabel = getPracticeMode(this.currentReviewState.modeId).label;
+                questionPart += this.isJapaneseUi() ? `（${modeLabel}）` : ` (${modeLabel})`;
+            }
+            if (this.currentReviewState.groupSize) {
+                const groupText = this.isJapaneseUi()
+                    ? `グループ ${this.currentReviewState.groupPosition}/${this.currentReviewState.groupSize}`
+                    : `group ${this.currentReviewState.groupPosition}/${this.currentReviewState.groupSize}`;
+                questionPart += this.isJapaneseUi() ? `（${groupText}）` : ` (${groupText})`;
             }
         }
 
